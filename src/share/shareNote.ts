@@ -1,7 +1,7 @@
 import { Notice, type App, type TFile } from 'obsidian';
 import type { ApiClient } from '../api/client';
 import type { ColabSettings, ShareResult } from '../types';
-import { deriveRoomToken, encrypt, generateKey, encryptBinary } from '../crypto/crypto';
+import { deriveRoomToken, deriveWriteCapability, encrypt, generateKey, encryptBinary } from '../crypto/crypto';
 import { encryptKeyForRecipient } from '../crypto/keyExchange';
 import { parseFrontmatter, stopShareSync } from '../session/sessions';
 import { findImageEmbeds } from './imageEmbeds';
@@ -119,8 +119,11 @@ export async function shareNote(
       // authorization boundary.
       collaborators: options.accessMode === 'invited_edit' ? validCollaborators : [],
     });
-    const roomToken = await deriveRoomToken(encryptionKey, result.shareId);
-    await api.setRoomToken(result.shareId, roomToken);
+    const [roomToken, writeToken] = await Promise.all([
+      deriveRoomToken(encryptionKey, result.shareId),
+      deriveWriteCapability(encryptionKey, result.shareId),
+    ]);
+    await api.setRoomToken(result.shareId, roomToken, writeToken);
 
     // Upload embedded images (normal ![[..]] embeds + baked CodeSuite figures)
     const imageFilenames = [...new Set([...findImageEmbeds(body), ...findCodeSuiteOutputImages(body)])];

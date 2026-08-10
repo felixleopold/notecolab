@@ -91,6 +91,15 @@ export async function decryptBinary(ciphertextBase64: string, keyBase64Url: stri
 }
 
 export async function deriveRoomToken(noteKeyBase64Url: string, roomId: string): Promise<string> {
+  return deriveNoteCapability(noteKeyBase64Url, `yjs-room-token:v1:${roomId}`);
+}
+
+/** Domain-separated proof that possession of the note key authorizes REST writes. */
+export async function deriveWriteCapability(noteKeyBase64Url: string, roomId: string): Promise<string> {
+  return deriveNoteCapability(noteKeyBase64Url, `rest-write-token:v1:${roomId}`);
+}
+
+async function deriveNoteCapability(noteKeyBase64Url: string, info: string): Promise<string> {
   const ikm = base64UrlToUint8Array(noteKeyBase64Url);
   const keyMaterial = await crypto.subtle.importKey(
     'raw', ikm, 'HKDF', false, ['deriveBits']
@@ -101,7 +110,7 @@ export async function deriveRoomToken(noteKeyBase64Url: string, roomId: string):
       name: 'HKDF',
       hash: 'SHA-256',
       salt: encoder.encode('notecolab'),
-      info: encoder.encode(`yjs-room-token:v1:${roomId}`),
+      info: encoder.encode(info),
     },
     keyMaterial,
     256

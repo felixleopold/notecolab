@@ -128,8 +128,8 @@ Think of a share as three pieces:
    (the part after `#`) contains the note key. Browsers do not send fragments in
    HTTP requests, so the key is not included in the request to the server.
 3. **Live collaboration** uses a Yjs document so everyone can merge concurrent
-   edits. Yjs updates and saved Yjs snapshots contain decrypted note text and
-   are visible to the collaboration relay. Live collaboration therefore has a
+   edits. Live Yjs updates contain decrypted note text and are visible to the
+   collaboration relay while a room is active. Live collaboration therefore has a
    different privacy boundary from stored REST shares.
 
 Each server creates its own anonymous User ID and authentication key for the
@@ -188,7 +188,7 @@ Important boundaries:
   the client with AES-256-GCM.
 - The plugin reads and writes Markdown files, frontmatter, and supported image
   embeds in your vault as needed to share, import, mirror, and synchronize them.
-- Live Yjs updates and persisted Yjs snapshots are readable by the relay/server.
+- Live Yjs updates are readable by the relay while a room is active.
 - Link holders can decrypt the shared note, and editable-link holders can change
   it. Recipients can always copy plaintext they are allowed to read.
 - Share metadata—including identifiers, permissions, timestamps, sizes,

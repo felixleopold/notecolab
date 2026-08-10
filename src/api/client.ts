@@ -1,5 +1,6 @@
 import { requestUrl } from 'obsidian';
 import type { ColabSettings, NoteContent, SessionInfo } from '../types';
+import { requestHeaders } from './credentials';
 
 export class ApiClient {
   /**
@@ -8,6 +9,8 @@ export class ApiClient {
    * a *different* server (the link carries its own host). See `withBaseUrl`.
    */
   private baseOverride?: string;
+  private includeCredentials = true;
+  private writeCapability?: string;
 
   constructor(private settings: ColabSettings) {}
 
@@ -17,8 +20,8 @@ export class ApiClient {
   }
 
   /**
-   * Return a client that talks to `baseUrl` (a share link's own origin) while
-   * reusing the same settings/credentials. This is what unlocks cross-server
+   * Return an anonymous client that talks to `baseUrl` (a share link's own
+   * origin). Home-server credentials are deliberately not copied. This unlocks cross-server
    * import + collaboration for read_only / public_edit links: the note's public
    * GET endpoints and the Yjs relay accept the link's shareId + derived room
    * token without a home-server account, so no federation is needed. (issue #8)
@@ -26,13 +29,28 @@ export class ApiClient {
   withBaseUrl(baseUrl: string): ApiClient {
     const clone = new ApiClient(this.settings);
     clone.baseOverride = baseUrl.replace(/\/+$/, '');
+    clone.includeCredentials = false;
+    clone.writeCapability = this.writeCapability;
     return clone;
+  }
+
+  /** Attach the key-derived capability used for anonymous public-edit writes. */
+  withWriteCapability(writeCapability: string): ApiClient {
+    const clone = new ApiClient(this.settings);
+    clone.baseOverride = this.baseOverride;
+    clone.includeCredentials = this.includeCredentials;
+    clone.writeCapability = writeCapability;
+    return clone;
+  }
+
+  get usesAccountCredentials(): boolean {
+    return this.includeCredentials;
   }
 
   private get headers(): Record<string, string> {
     return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.settings.apiKey}`,
+      ...requestHeaders(this.settings.apiKey, this.includeCredentials),
+      ...(this.writeCapability ? { 'X-NoteColab-Write-Token': this.writeCapability } : {}),
     };
   }
 
@@ -162,40 +180,13 @@ export class ApiClient {
     }
   }
 
-  async saveYjsState(shareId: string, docUpdate: string): Promise<boolean> {
-    try {
-      await requestUrl({
-        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/yjs`,
-        method: 'PUT',
-        headers: this.headers,
-        body: JSON.stringify({ docUpdate }),
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async getYjsState(shareId: string): Promise<string | null> {
-    try {
-      const res = await requestUrl({
-        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/yjs`,
-        method: 'GET',
-        headers: this.headers,
-      });
-      return res.json.docUpdate;
-    } catch {
-      return null;
-    }
-  }
-
-  async setRoomToken(shareId: string, roomToken: string): Promise<boolean> {
+  async setRoomToken(shareId: string, roomToken: string, writeToken?: string): Promise<boolean> {
     try {
       await requestUrl({
         url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/room-token`,
         method: 'PUT',
         headers: this.headers,
-        body: JSON.stringify({ roomToken }),
+        body: JSON.stringify({ roomToken, ...(writeToken ? { writeToken } : {}) }),
       });
       return true;
     } catch (e: any) {

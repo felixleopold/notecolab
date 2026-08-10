@@ -1,6 +1,6 @@
 {
   "name": "notecolab",
-  "version": "1.29.5",
+  "version": "1.29.7",
   "private": true,
   "type": "module",
   "main": "main.js",
@@ -28,5 +28,10 @@
     "svelte-preprocess": "^6.0.3",
     "tsx": "^4.23.1",
     "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "y-websocket": {
+      "ws": "^8.21.0"
+    }
   }
 }

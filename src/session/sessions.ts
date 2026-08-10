@@ -3,7 +3,8 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import type { ColabSettings } from '../types';
 import type { ApiClient } from '../api/client';
-import { deriveRoomToken, encrypt, encryptBinary } from '../crypto/crypto';
+import { deriveRoomToken, deriveWriteCapability, encrypt, encryptBinary } from '../crypto/crypto';
+import { websocketCredentials } from '../api/credentials';
 import { downloadMissingAssets } from '../share/assets';
 import { findImageEmbeds } from '../share/imageEmbeds';
 import { hasMatchingEditableShareIdentity, hasMatchingShareIdentity } from './shareIdentity';
@@ -342,7 +343,12 @@ export async function startShareSync(
     }
 
     // Connect WebSocket to same room as web editor
-    const roomToken = encryptionKey ? await deriveRoomToken(encryptionKey, shareId) : '';
+    const [roomToken, writeCapability] = encryptionKey
+      ? await Promise.all([
+          deriveRoomToken(encryptionKey, shareId),
+          deriveWriteCapability(encryptionKey, shareId),
+        ])
+      : ['', ''];
     if (generation !== shareSyncGeneration) return;
     const latestContent = await app.vault.read(file);
     if (generation !== shareSyncGeneration) return;
@@ -350,14 +356,17 @@ export async function startShareSync(
       doc.destroy();
       return;
     }
-    if (api && roomToken) {
-      void api.setRoomToken(shareId, roomToken);
+    if (api && writeCapability) {
+      api = api.withWriteCapability(writeCapability);
+    }
+    if (api?.usesAccountCredentials && roomToken) {
+      void api.setRoomToken(shareId, roomToken, writeCapability);
     }
 
     const wsUrl = (origin || settings.serverUrl).replace(/^http/, 'ws');
     const provider = new WebsocketProvider(wsUrl + '/ws/yjs', shareId, doc, {
       params: {
-        ...(settings.apiKey ? { token: settings.apiKey } : {}),
+        ...websocketCredentials(settings.apiKey, api?.usesAccountCredentials ?? !origin),
         link: permissionShareId,
         ...(roomToken ? { rt: roomToken } : {}),
       },
@@ -475,13 +484,14 @@ export async function startShareSync(
 
     // Periodic health check: detect expiry or permission changes
     if (api) {
+      const healthApi = api;
       let consecutiveFailures = 0;
       let lastFailureReason: string | null = null;
       const FAILURE_THRESHOLD = 3; // require 3 consecutive same-reason failures before acting
 
       const healthInterval = setInterval(async () => {
         try {
-          const meta = await api.getNoteMeta(permissionShareId);
+          const meta = await healthApi.getNoteMeta(permissionShareId);
           if (disposed) return;
 
           // Classify this poll. `null` means a network/transient error (timeout,
