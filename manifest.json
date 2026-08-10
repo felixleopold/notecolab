@@ -1,0 +1,10 @@
+{
+  "id": "notecolab",
+  "name": "Note Colab",
+  "version": "1.29.2",
+  "minAppVersion": "1.7.2",
+  "description": "Share encrypted notes and collaborate live in Obsidian or the browser",
+  "author": "Felix Mrak",
+  "authorUrl": "https://github.com/felixleopold",
+  "isDesktopOnly": false
+}

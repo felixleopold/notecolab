@@ -1,0 +1,32 @@
+{
+  "name": "notecolab",
+  "version": "1.29.2",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "lib0": "^0.2.98",
+    "simple-peer": "^9.11.1",
+    "tweetnacl": "^1.0.3",
+    "y-protocols": "^1.0.6",
+    "y-websocket": "^2.0.4",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@tsconfig/svelte": "^5.0.4",
+    "@types/node": "^20.17.0",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.0",
+    "esbuild-svelte": "^0.8.2",
+    "obsidian": "^1.7.2",
+    "svelte": "^4.2.19",
+    "svelte-preprocess": "^6.0.3",
+    "tsx": "^4.23.1",
+    "typescript": "^5.6.0"
+  }
+}
