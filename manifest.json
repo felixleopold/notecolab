@@ -1,7 +1,7 @@
 {
   "id": "notecolab",
   "name": "Note Colab",
-  "version": "1.29.4",
+  "version": "1.29.5",
   "minAppVersion": "1.7.2",
   "description": "Share encrypted notes and collaborate live in your vault or the browser.",
   "author": "Felix Mrak",

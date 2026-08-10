@@ -37,7 +37,7 @@ export class ColabSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName('Note Colab settings').setHeading();
+    new Setting(containerEl).setName('Connection').setHeading();
 
     const serverSetting = new Setting(containerEl)
       .setName('Server URL')
