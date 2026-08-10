@@ -40,8 +40,7 @@ export class ForeignHostModal extends Modal {
     contentEl.createEl('h2', { text: 'Import from a different server?' });
 
     const desc = contentEl.createDiv();
-    desc.style.marginBottom = '16px';
-    desc.style.lineHeight = '1.5';
+    desc.setCssStyles({ marginBottom: '16px', lineHeight: '1.5' });
 
     const p = desc.createEl('p');
     p.appendText('This link points at ');
@@ -55,10 +54,12 @@ export class ForeignHostModal extends Modal {
     });
 
     const btnRow = contentEl.createDiv();
-    btnRow.style.display = 'flex';
-    btnRow.style.gap = '8px';
-    btnRow.style.justifyContent = 'flex-end';
-    btnRow.style.flexWrap = 'wrap';
+    btnRow.setCssStyles({
+      display: 'flex',
+      gap: '8px',
+      justifyContent: 'flex-end',
+      flexWrap: 'wrap',
+    });
 
     const cancelBtn = btnRow.createEl('button', { text: 'Cancel' });
     cancelBtn.addEventListener('click', () => this.choose('cancel'));
@@ -67,8 +68,10 @@ export class ForeignHostModal extends Modal {
     alwaysBtn.addEventListener('click', () => this.choose('always'));
 
     const onceBtn = btnRow.createEl('button', { text: 'Import once' });
-    onceBtn.style.background = 'var(--interactive-accent)';
-    onceBtn.style.color = 'var(--text-on-accent)';
+    onceBtn.setCssStyles({
+      background: 'var(--interactive-accent)',
+      color: 'var(--text-on-accent)',
+    });
     onceBtn.addEventListener('click', () => this.choose('once'));
   }
 

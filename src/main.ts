@@ -504,26 +504,31 @@ export default class ColabPlugin extends Plugin {
   private createReadOnlyBanner(file: TFile): HTMLElement {
     const banner = document.createElement('div');
     banner.className = 'notecolab-read-only-banner';
-    banner.style.display = 'flex';
-    banner.style.alignItems = 'center';
-    banner.style.justifyContent = 'space-between';
-    banner.style.flexWrap = 'wrap';
-    banner.style.gap = '12px';
-    banner.style.padding = '8px 12px';
-    banner.style.borderBottom = '1px solid var(--background-modifier-border)';
-    banner.style.background = 'var(--background-secondary)';
+    banner.setCssStyles({
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      flexWrap: 'wrap',
+      gap: '12px',
+      padding: '8px 12px',
+      borderBottom: '1px solid var(--background-modifier-border)',
+      background: 'var(--background-secondary)',
+    });
 
     const message = banner.createDiv();
     message.createEl('strong', { text: 'Read-only shared note' });
-    message.createDiv({
+    const description = message.createDiv({
       text: 'Updates from the owner are applied automatically. Create a local copy to make changes.',
-    }).style.color = 'var(--text-muted)';
+    });
+    description.setCssStyles({ color: 'var(--text-muted)' });
 
     const actions = banner.createDiv();
-    actions.style.display = 'flex';
-    actions.style.flexWrap = 'wrap';
-    actions.style.gap = '6px';
-    actions.style.flexShrink = '0';
+    actions.setCssStyles({
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '6px',
+      flexShrink: '0',
+    });
 
     const remove = actions.createEl('button', { text: 'Delete & stop updates' });
     remove.addEventListener('click', () => this.confirmDeleteReadOnlyMirror(file));
@@ -837,7 +842,6 @@ export default class ColabPlugin extends Plugin {
     for (const timer of this.pendingDeletions.values()) clearTimeout(timer);
     this.pendingDeletions.clear();
     destroyAllShareSyncs(this.app);
-    this.app.workspace.detachLeavesOfType(DASHBOARD_VIEW_TYPE);
   }
 
   async loadSettings() {
@@ -1014,16 +1018,16 @@ export default class ColabPlugin extends Plugin {
           ? 'Colab: read-only · updating…'
           : 'Colab: read-only · synced',
       );
-      this.statusBarItem.style.color = '';
+      this.statusBarItem.setCssStyles({ color: '' });
     } else if (status === 'connected') {
       this.statusBarItem.setText('Colab: syncing');
-      this.statusBarItem.style.color = '';
+      this.statusBarItem.setCssStyles({ color: '' });
     } else if (status === 'connecting') {
       this.statusBarItem.setText('Colab: connecting…');
-      this.statusBarItem.style.color = '';
+      this.statusBarItem.setCssStyles({ color: '' });
     } else if (status === 'disconnected') {
       this.statusBarItem.setText('Colab: disconnected');
-      this.statusBarItem.style.color = '';
+      this.statusBarItem.setCssStyles({ color: '' });
     } else {
       this.statusBarItem.setText('');
     }

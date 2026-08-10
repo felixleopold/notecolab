@@ -39,8 +39,7 @@ export class IncomingShareModal extends Modal {
     contentEl.createEl('h2', { text: 'Note shared with you' });
 
     const desc = contentEl.createDiv();
-    desc.style.marginBottom = '16px';
-    desc.style.lineHeight = '1.5';
+    desc.setCssStyles({ marginBottom: '16px', lineHeight: '1.5' });
 
     const intro = desc.createEl('p');
     intro.appendText(`${this.info.senderName} wants to share `);
@@ -50,37 +49,40 @@ export class IncomingShareModal extends Modal {
     // Sender identity box — show the UID the note was shared to/from so the
     // recipient can confirm it's someone they trust before importing.
     const idBox = contentEl.createDiv();
-    idBox.style.padding = '10px 12px';
-    idBox.style.marginBottom = '16px';
-    idBox.style.borderRadius = '8px';
-    idBox.style.border = '1px solid var(--background-modifier-border)';
-    idBox.style.fontSize = '12px';
-    idBox.style.lineHeight = '1.5';
+    idBox.setCssStyles({
+      padding: '10px 12px',
+      marginBottom: '16px',
+      borderRadius: '8px',
+      border: '1px solid var(--background-modifier-border)',
+      fontSize: '12px',
+      lineHeight: '1.5',
+    });
     idBox.createEl('div', { text: 'Shared by user ID:' });
     const uidEl = idBox.createEl('code', { text: this.info.senderUid });
-    uidEl.style.wordBreak = 'break-all';
+    uidEl.setCssStyles({ wordBreak: 'break-all' });
 
     const behavior = this.info.accessMode === 'read_only'
       ? 'It will be imported as a read-only mirror that receives updates from the owner.'
       : this.info.accessMode === 'public_edit'
         ? 'It will be imported as an editable note with two-way sync. Anyone with its web link can also edit.'
         : 'It will be imported as an editable note. Only invited collaborators can access it.';
-    desc.createEl('p', {
+    const behaviorDescription = desc.createEl('p', {
       text: `${behavior} Accept to add it to your vault, or deny to ignore it.`,
-    }).style.fontSize = '13px';
+    });
+    behaviorDescription.setCssStyles({ fontSize: '13px' });
 
     // Buttons
     const btnRow = contentEl.createDiv();
-    btnRow.style.display = 'flex';
-    btnRow.style.gap = '8px';
-    btnRow.style.justifyContent = 'flex-end';
+    btnRow.setCssStyles({ display: 'flex', gap: '8px', justifyContent: 'flex-end' });
 
     const denyBtn = btnRow.createEl('button', { text: 'Deny' });
     denyBtn.addEventListener('click', () => this.decide('deny'));
 
     const acceptBtn = btnRow.createEl('button', { text: 'Accept & import' });
-    acceptBtn.style.background = 'var(--interactive-accent)';
-    acceptBtn.style.color = 'var(--text-on-accent)';
+    acceptBtn.setCssStyles({
+      background: 'var(--interactive-accent)',
+      color: 'var(--text-on-accent)',
+    });
     acceptBtn.addEventListener('click', () => this.decide('accept'));
   }
 

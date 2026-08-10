@@ -22,10 +22,12 @@ export class ReadOnlyMirrorModal extends Modal {
     });
 
     const actions = contentEl.createDiv();
-    actions.style.display = 'flex';
-    actions.style.flexWrap = 'wrap';
-    actions.style.gap = '8px';
-    actions.style.justifyContent = 'flex-end';
+    actions.setCssStyles({
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '8px',
+      justifyContent: 'flex-end',
+    });
 
     const keep = actions.createEl('button', { text: 'Keep viewing' });
     keep.addEventListener('click', () => this.close());

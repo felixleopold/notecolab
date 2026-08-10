@@ -21,7 +21,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
 /** Sanitize a share-supplied title to one safe vault filename segment. */
 export function sanitizeFilename(name: string): string {
   const base = (name.split(/[\\/]/).pop() || '')
-    // eslint-disable-next-line no-control-regex
+    // eslint-disable-next-line no-control-regex -- Control characters are invalid in filenames.
     .replace(/[<>:"|?*\u0000-\u001f]/g, '')
     .replace(/^\.+/, '')
     .trim();
@@ -31,7 +31,7 @@ export function sanitizeFilename(name: string): string {
 function sanitizeLabel(label: string): string {
   return label
     .replace(/[\\/]/g, ' ')
-    // eslint-disable-next-line no-control-regex
+    // eslint-disable-next-line no-control-regex -- Control characters are invalid in filenames.
     .replace(/[<>:"|?*\u0000-\u001f]/g, '')
     .replace(/\s+/g, ' ')
     .trim();

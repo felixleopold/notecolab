@@ -18,9 +18,7 @@ export class DeleteReadOnlyMirrorModal extends Modal {
     });
 
     const actions = contentEl.createDiv();
-    actions.style.display = 'flex';
-    actions.style.gap = '8px';
-    actions.style.justifyContent = 'flex-end';
+    actions.setCssStyles({ display: 'flex', gap: '8px', justifyContent: 'flex-end' });
 
     const cancel = actions.createEl('button', { text: 'Cancel' });
     cancel.addEventListener('click', () => this.close());

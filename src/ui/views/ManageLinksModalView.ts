@@ -36,8 +36,7 @@ export class ManageLinksModalView extends Modal {
     contentEl.empty();
     contentEl.addClass('notecolab-manage-links-modal');
 
-    modalEl.style.width = '550px';
-    modalEl.style.maxWidth = '90vw';
+    modalEl.setCssStyles({ width: '550px', maxWidth: '90vw' });
 
     this.component = new ManageLinksComponent({
       target: contentEl,

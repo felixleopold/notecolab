@@ -32,8 +32,7 @@ export class ShareModalView extends Modal {
     contentEl.empty();
     contentEl.addClass('notecolab-share-modal');
 
-    modalEl.style.width = '620px';
-    modalEl.style.maxWidth = '90vw';
+    modalEl.setCssStyles({ width: '620px', maxWidth: '90vw' });
 
     this.component = new ShareNoteComponent({
       target: contentEl,

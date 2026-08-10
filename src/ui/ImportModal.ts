@@ -23,7 +23,7 @@ export class ImportModal extends Modal {
           .onChange((value) => {
             this.url = value;
           });
-        text.inputEl.style.width = '100%';
+        text.inputEl.setCssStyles({ width: '100%' });
       });
 
     new Setting(contentEl)

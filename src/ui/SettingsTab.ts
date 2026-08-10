@@ -37,7 +37,7 @@ export class ColabSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl('h2', { text: 'Note Colab settings' });
+    new Setting(containerEl).setName('Note Colab settings').setHeading();
 
     const serverSetting = new Setting(containerEl)
       .setName('Server URL')
@@ -249,7 +249,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     void this.renderPlanSection(planContainer);
 
     // Trusted contacts section
-    containerEl.createEl('h2', { text: 'Trusted Contacts' });
+    new Setting(containerEl).setName('Trusted contacts').setHeading();
     containerEl.createEl('p', {
       text: 'Add contacts by User ID. Their public username is filled in automatically; an optional alias is private to this vault.',
       cls: 'setting-item-description',
@@ -259,7 +259,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     this.renderContacts(contactsContainer);
 
     // Web Dashboard section
-    containerEl.createEl('h2', { text: 'Web Dashboard' });
+    new Setting(containerEl).setName('Web dashboard').setHeading();
     containerEl.createEl('p', {
       text: 'Set a password to access your shared notes from the web dashboard. This also encrypts your note keys for web access.',
       cls: 'setting-item-description',
@@ -354,7 +354,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     }
 
     // Reset plugin
-    containerEl.createEl('h2', { text: 'Danger Zone' });
+    new Setting(containerEl).setName('Danger zone').setHeading();
 
     new Setting(containerEl)
       .setName('Rotate API key')
@@ -422,7 +422,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     container.empty();
     if (!this.plugin.settings.apiKey) return;
 
-    container.createEl('h2', { text: 'Plan & Storage' });
+    new Setting(container).setName('Plan & storage').setHeading();
     const loading = container.createEl('p', { text: 'Loading plan…', cls: 'setting-item-description' });
 
     const info = await this.plugin.api.getBillingInfo();
@@ -487,17 +487,24 @@ export class ColabSettingsTab extends PluginSettingTab {
     // Usage bar
     if (!storage.unlimited) {
       const bar = container.createDiv();
-      bar.style.height = '6px';
-      bar.style.borderRadius = '3px';
-      bar.style.background = 'var(--background-modifier-border)';
-      bar.style.margin = '4px 0 12px';
+      bar.setCssStyles({
+        height: '6px',
+        borderRadius: '3px',
+        background: 'var(--background-modifier-border)',
+        margin: '4px 0 12px',
+      });
       const pct = Math.min(100, storage.usagePercent);
       const fill = bar.createDiv();
-      fill.style.height = '100%';
-      fill.style.width = `${pct}%`;
-      fill.style.borderRadius = '3px';
-      fill.style.background =
-        pct >= 95 ? 'var(--text-error)' : pct >= 80 ? 'var(--color-orange, orange)' : 'var(--interactive-accent)';
+      fill.setCssStyles({
+        height: '100%',
+        width: `${pct}%`,
+        borderRadius: '3px',
+        background: pct >= 95
+          ? 'var(--text-error)'
+          : pct >= 80
+            ? 'var(--color-orange, orange)'
+            : 'var(--interactive-accent)',
+      });
     }
 
     // Footnote: availability or self-hosting hint.
