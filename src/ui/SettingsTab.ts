@@ -73,78 +73,95 @@ export class ColabSettingsTab extends PluginSettingTab {
         }
 
         const urlChanged = pendingUrl !== this.plugin.settings.serverUrl;
-        this.plugin.settings.serverUrl = pendingUrl;
 
         if (urlChanged || !this.plugin.settings.apiKey) {
-          // Clear credentials that belong to the old server
-          this.plugin.settings.apiKey = '';
-          this.plugin.settings.uid = '';
-          this.plugin.settings.publicKey = '';
-          this.plugin.settings.secretKey = '';
-          this.plugin.settings.contacts = [];
-          this.plugin.settings.vaultKey = '';
-          this.plugin.settings.username = '';
-          this.plugin.settings.usernamePromptState = 'after_shares';
-          this.plugin.settings.sharedNoteCount = 0;
-          await this.plugin.saveSettings();
-
-          // Re-register with the new server. Some servers run in "closed
-          // server" mode: registration may be invite-gated or disabled entirely.
-          try {
-            this.plugin.api = new ApiClient(this.plugin.settings);
-
-            // Ask the server how registration works so we can prompt if needed.
-            const info = await this.plugin.api.getServerInfo();
-            const mode = info?.registration?.mode || 'open';
-
-            if (mode === 'closed') {
-              new Notice('This server is private and closed to self-registration. Ask the admin to provision an account.');
+          if (this.plugin.settings.apiKey) {
+            const confirmed = await this.confirmAction(
+              'Create an account on another server?',
+              'A different server has a separate identity. Your existing notes, storage plan, and subscription will remain on the current server.',
+              'Create account',
+            );
+            if (!confirmed) {
               btn.setButtonText('Connect');
               btn.setDisabled(false);
-              this.display();
               return;
             }
+          }
 
-            let inviteCode: string | undefined;
-            if (mode === 'invite') {
-              const code = await new Promise<string | null>((resolve) => {
-                new InviteCodeModal(this.app, pendingUrl, resolve).open();
-              });
-              if (!code) {
-                new Notice('An invite code is required to register on this server.');
-                btn.setButtonText('Connect');
-                btn.setDisabled(false);
-                this.display();
-                return;
-              }
-              inviteCode = code;
-            }
-
-            const kp = await import('../crypto/keyExchange').then(m => m.generateKeyPair());
-            const { uid, apiKey } = await this.plugin.api.register(kp.publicKey, inviteCode);
-            this.plugin.settings.uid = uid;
-            this.plugin.settings.apiKey = apiKey;
-            this.plugin.settings.publicKey = kp.publicKey;
-            this.plugin.settings.secretKey = kp.secretKey;
+          const identity = await this.registerAtServer(pendingUrl);
+          if (identity) {
+            destroyAllShareSyncs(this.plugin.app);
+            this.applyFreshIdentity(pendingUrl, identity);
             await this.plugin.saveSettings();
             this.plugin.api = new ApiClient(this.plugin.settings);
             new Notice('Connected to ' + pendingUrl);
-          } catch (e) {
-            console.error('Registration failed:', e);
-            const status = (e as { status?: number })?.status;
-            if (status === 403) {
-              new Notice('Registration was rejected — the invite code may be wrong, or this server is closed.');
-            } else {
-              new Notice('Server reachable but registration failed. Try again.');
-            }
           }
         } else {
-          await this.plugin.saveSettings();
           new Notice('Connection verified');
         }
 
         this.display(); // refresh to show updated status
       });
+    });
+    serverSetting.addButton((btn) => {
+      btn.setButtonText('Restore account').onClick(async () => {
+        if (!pendingUrl) {
+          new Notice('Please enter the account server URL');
+          return;
+        }
+        const credentials = await new Promise<{ uid: string; password: string } | null>((resolve) => {
+          new RestoreAccountModal(this.app, pendingUrl, resolve).open();
+        });
+        if (!credentials) return;
+
+        btn.setDisabled(true).setButtonText('Restoring…');
+        try {
+          const kp = await import('../crypto/keyExchange').then((module) => module.generateKeyPair());
+          const recoveryClient = new ApiClient({
+            ...this.plugin.settings,
+            serverUrl: pendingUrl,
+            apiKey: '',
+            uid: '',
+          });
+          const result = await recoveryClient.recoverPlugin(credentials.uid, credentials.password, kp.publicKey);
+          if ('error' in result) {
+            new Notice(result.error);
+            return;
+          }
+
+          let vaultKey = '';
+          if (result.vaultSalt) {
+            try {
+              vaultKey = await deriveVaultKey(credentials.password, result.vaultSalt);
+            } catch (error) {
+              console.warn('Account restored but vault-key derivation failed:', error);
+            }
+          }
+          destroyAllShareSyncs(this.plugin.app);
+          this.plugin.settings.serverUrl = pendingUrl;
+          this.plugin.settings.uid = result.uid;
+          this.plugin.settings.apiKey = result.apiKey;
+          this.plugin.settings.publicKey = kp.publicKey;
+          this.plugin.settings.secretKey = kp.secretKey;
+          this.plugin.settings.vaultKey = vaultKey;
+          this.plugin.settings.username = result.displayName || '';
+          this.plugin.settings.usernamePromptState = result.displayName ? 'done' : 'after_shares';
+          await this.plugin.saveSettings();
+          this.plugin.api = new ApiClient(this.plugin.settings);
+          new Notice('Account restored. The previous plugin credential is now invalid. Pending invitations encrypted for the old device may need to be resent.', 12_000);
+          this.display();
+        } catch (error) {
+          console.error('Account recovery failed:', error);
+          new Notice('Could not restore the account. Your current local settings were kept.');
+        } finally {
+          btn.setDisabled(false).setButtonText('Restore account');
+        }
+      });
+    });
+
+    containerEl.createEl('p', {
+      text: 'Used NoteColab before? Restore the existing account instead of connecting as a new user, or its notes and paid storage will remain attached to the old User ID.',
+      cls: 'setting-item-description',
     });
 
     new Setting(containerEl)
@@ -261,7 +278,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     // Web Dashboard section
     new Setting(containerEl).setName('Web dashboard').setHeading();
     containerEl.createEl('p', {
-      text: 'Set a password to access your shared notes from the web dashboard. This also encrypts your note keys for web access.',
+      text: 'Set a password to access your shared notes from the web dashboard and restore this account after a reset or device replacement. Save your User ID too. This also encrypts your note keys for web access.',
       cls: 'setting-item-description',
     });
 
@@ -353,7 +370,7 @@ export class ColabSettingsTab extends PluginSettingTab {
         });
     }
 
-    // Reset plugin
+    // Identity lifecycle
     new Setting(containerEl).setName('Danger zone').setHeading();
 
     new Setting(containerEl)
@@ -381,40 +398,102 @@ export class ColabSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('Reset plugin')
-      .setDesc('Clears your API key and User ID, stops all active syncs, and re-registers with the server. Use this if authentication is broken.')
+      .setName('Create a new account')
+      .setDesc('Starts over with a new User ID. The current account, notes, and paid storage stay on the old User ID.')
       .addButton((btn) => {
         btn
-          .setButtonText('Reset')
+          .setButtonText('Create new')
           .setWarning()
           .onClick(async () => {
-            destroyAllShareSyncs(this.plugin.app);
+            const confirmed = await this.confirmAction(
+              'Create a new NoteColab account?',
+              'This does not move your notes or storage subscription. Without a saved User ID and recovery password, the old account may be permanently inaccessible.',
+              'Create new account',
+            );
+            if (!confirmed) return;
 
-            this.plugin.settings.apiKey = DEFAULT_SETTINGS.apiKey;
-            this.plugin.settings.uid = DEFAULT_SETTINGS.uid;
-            this.plugin.settings.publicKey = DEFAULT_SETTINGS.publicKey;
-            this.plugin.settings.secretKey = DEFAULT_SETTINGS.secretKey;
-            await this.plugin.saveSettings();
-
-            try {
-              this.plugin.api = new ApiClient(this.plugin.settings);
-              const kp = await import('../crypto/keyExchange').then(m => m.generateKeyPair());
-              const { uid, apiKey } = await this.plugin.api.register(kp.publicKey);
-              this.plugin.settings.uid = uid;
-              this.plugin.settings.apiKey = apiKey;
-              this.plugin.settings.publicKey = kp.publicKey;
-              this.plugin.settings.secretKey = kp.secretKey;
+            btn.setDisabled(true).setButtonText('Creating…');
+            const identity = await this.registerAtServer(this.plugin.settings.serverUrl);
+            if (identity) {
+              destroyAllShareSyncs(this.plugin.app);
+              this.applyFreshIdentity(this.plugin.settings.serverUrl, identity);
               await this.plugin.saveSettings();
               this.plugin.api = new ApiClient(this.plugin.settings);
-              new Notice('Plugin reset and re-registered successfully');
-            } catch (e) {
-              console.error('Failed to re-register:', e);
-              new Notice('Reset completed but re-registration failed. Try restarting Obsidian.');
+              new Notice('New account created. The previous account was not deleted or transferred.');
+              this.display();
             }
-
-            this.display();
+            btn.setDisabled(false).setButtonText('Create new');
           });
       });
+  }
+
+  private async registerAtServer(serverUrl: string): Promise<{
+    uid: string;
+    apiKey: string;
+    publicKey: string;
+    secretKey: string;
+  } | null> {
+    const registrationClient = new ApiClient({
+      ...this.plugin.settings,
+      serverUrl,
+      apiKey: '',
+      uid: '',
+    });
+    const info = await registrationClient.getServerInfo();
+    const mode = info?.registration?.mode || 'open';
+    if (mode === 'closed') {
+      new Notice('This server is private and closed to self-registration. Ask the admin to provision an account.');
+      return null;
+    }
+
+    let inviteCode: string | undefined;
+    if (mode === 'invite') {
+      const code = await new Promise<string | null>((resolve) => {
+        new InviteCodeModal(this.app, serverUrl, resolve).open();
+      });
+      if (!code) {
+        new Notice('An invite code is required to register on this server.');
+        return null;
+      }
+      inviteCode = code;
+    }
+
+    try {
+      const kp = await import('../crypto/keyExchange').then((module) => module.generateKeyPair());
+      const registered = await registrationClient.register(kp.publicKey, inviteCode);
+      return { ...registered, publicKey: kp.publicKey, secretKey: kp.secretKey };
+    } catch (error) {
+      console.error('Registration failed:', error);
+      const status = (error as { status?: number }).status;
+      new Notice(status === 403
+        ? 'Registration was rejected — the invite code may be wrong, or this server is closed.'
+        : 'Server reachable but registration failed. Your current account was kept.');
+      return null;
+    }
+  }
+
+  private applyFreshIdentity(serverUrl: string, identity: {
+    uid: string;
+    apiKey: string;
+    publicKey: string;
+    secretKey: string;
+  }): void {
+    this.plugin.settings.serverUrl = serverUrl;
+    this.plugin.settings.uid = identity.uid;
+    this.plugin.settings.apiKey = identity.apiKey;
+    this.plugin.settings.publicKey = identity.publicKey;
+    this.plugin.settings.secretKey = identity.secretKey;
+    this.plugin.settings.contacts = [];
+    this.plugin.settings.vaultKey = DEFAULT_SETTINGS.vaultKey;
+    this.plugin.settings.username = DEFAULT_SETTINGS.username;
+    this.plugin.settings.usernamePromptState = DEFAULT_SETTINGS.usernamePromptState;
+    this.plugin.settings.sharedNoteCount = DEFAULT_SETTINGS.sharedNoteCount;
+  }
+
+  private confirmAction(title: string, message: string, confirmLabel: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      new ConfirmActionModal(this.app, title, message, confirmLabel, resolve).open();
+    });
   }
 
   /** Show the current plan, storage usage, and an upgrade path (if offered). */
@@ -442,6 +521,13 @@ export class ColabSettingsTab extends PluginSettingTab {
         - (b.quotaBytes <= 0 ? Number.POSITIVE_INFINITY : b.quotaBytes));
     const planName = currentPlan?.name || plan;
 
+    if (upgradePlans.length > 0 && !info.recoveryConfigured) {
+      container.createEl('p', {
+        text: '⚠ Strongly recommended before paying: set a Web password below and save your User ID. Without both, a plugin reset or lost device can permanently strand this account, its notes, and its paid storage.',
+        cls: 'setting-item-description',
+      });
+    }
+
     let usageText = storage.unlimited
       ? `${fmtBytes(storage.usedBytes)} used — unlimited`
       : `${fmtBytes(storage.usedBytes)} of ${fmtBytes(storage.limitBytes)} (${storage.usagePercent}%)`;
@@ -466,6 +552,17 @@ export class ColabSettingsTab extends PluginSettingTab {
         .addButton((btn) => {
           const label = `Choose ${upgradePlan.name}`;
           btn.setButtonText(label).setCta().onClick(async () => {
+            if (!info.recoveryConfigured) {
+              const proceed = await this.confirmAction(
+                'No account recovery password is set',
+                `You can still buy ${upgradePlan.name}, but a plugin reset or lost device may permanently strand the subscription and stored notes. Strongly consider cancelling now, setting a Web password below, and saving your User ID.`,
+                'Continue anyway',
+              );
+              if (!proceed) {
+                new Notice('Checkout cancelled. Set a Web password and save your User ID before trying again.');
+                return;
+              }
+            }
             btn.setDisabled(true);
             btn.setButtonText('Opening…');
             const res = await this.plugin.api.createCheckout(upgradePlan.id);
@@ -611,6 +708,102 @@ export class ColabSettingsTab extends PluginSettingTab {
     return results;
   }
 
+}
+
+class RestoreAccountModal extends Modal {
+  private resolved = false;
+  private uid = '';
+  private password = '';
+
+  constructor(
+    app: App,
+    private serverUrl: string,
+    private resolve: (credentials: { uid: string; password: string } | null) => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl('h3', { text: 'Restore an existing account' });
+    contentEl.createEl('p', {
+      text: `Sign in to the account on ${this.serverUrl}. This transfers it to this plugin installation and invalidates the previous plugin credential. Your User ID, notes, storage usage, and paid plan stay together.`,
+    });
+    contentEl.createEl('p', {
+      text: 'A new encryption keypair will be created. Pending invitations encrypted for a lost device may need to be resent.',
+      cls: 'setting-item-description',
+    });
+
+    const submit = () => {
+      const uid = this.uid.trim();
+      if (!uid || !this.password) {
+        new Notice('Enter your User ID and recovery password');
+        return;
+      }
+      this.resolved = true;
+      this.resolve({ uid, password: this.password });
+      this.close();
+    };
+
+    new Setting(contentEl)
+      .setName('User ID')
+      .addText((text) => text.setPlaceholder('Your existing User ID').onChange((value) => { this.uid = value; }));
+    new Setting(contentEl)
+      .setName('Password')
+      .addText((text) => {
+        text.inputEl.type = 'password';
+        text.setPlaceholder('Web / recovery password').onChange((value) => { this.password = value; });
+        text.inputEl.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') { event.preventDefault(); submit(); }
+        });
+      });
+    new Setting(contentEl)
+      .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton((button) => button.setCta().setButtonText('Restore account').onClick(submit));
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    if (!this.resolved) {
+      this.resolved = true;
+      this.resolve(null);
+    }
+  }
+}
+
+class ConfirmActionModal extends Modal {
+  private resolved = false;
+
+  constructor(
+    app: App,
+    private title: string,
+    private message: string,
+    private confirmLabel: string,
+    private resolve: (confirmed: boolean) => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl('h3', { text: this.title });
+    contentEl.createEl('p', { text: this.message });
+    new Setting(contentEl)
+      .addButton((button) => button.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton((button) => button.setWarning().setButtonText(this.confirmLabel).onClick(() => {
+        this.resolved = true;
+        this.resolve(true);
+        this.close();
+      }));
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    if (!this.resolved) {
+      this.resolved = true;
+      this.resolve(false);
+    }
+  }
 }
 
 /** Prompt for the invite code an `invite`-mode server requires to register. */

@@ -175,6 +175,11 @@ After deploying it:
 4. Confirm that a new User ID appears, then create and open a test share before
    relying on the deployment.
 
+Set a Web password and save the full User ID somewhere safe. This is strongly
+recommended before buying storage: **Restore account** can use them to transfer
+the same identity, notes, and plan to a replacement plugin installation. Without
+them, a reset or lost device may leave the account and paid storage inaccessible.
+
 ## Privacy and security
 
 For sharing, registration, and collaboration, the plugin connects to the

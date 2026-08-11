@@ -64,6 +64,24 @@ export class ApiClient {
     return res.json;
   }
 
+  async recoverPlugin(uid: string, password: string, publicKey: string): Promise<
+    | { uid: string; apiKey: string; displayName: string | null; vaultSalt: string | null }
+    | { error: string }
+  > {
+    try {
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/auth/recover-plugin`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, password, publicKey }),
+      });
+      return res.json;
+    } catch (error) {
+      const response = error as { json?: { error?: string } };
+      return { error: response.json?.error || 'Account recovery failed' };
+    }
+  }
+
   async shareNote(data: {
     title?: string;
     encryptedTitle?: string;
@@ -439,6 +457,7 @@ export class ApiClient {
     plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean }>;
     plan?: string;
     planExpiresAt?: string | null;
+    recoveryConfigured?: boolean;
     storage?: { usedBytes: number; limitBytes: number; unlimited: boolean; usagePercent: number };
   } | null> {
     try {
