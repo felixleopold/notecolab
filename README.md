@@ -135,7 +135,11 @@ Think of a share as three pieces:
 Each server creates its own anonymous User ID and authentication key for the
 plugin. For direct delivery, Note Colab uses the recipient's public key to wrap
 the note key so only that recipient can open it. There is no identity federation
-between servers.
+between servers. The plugin pins each server-and-user public key on first use and
+blocks unexpected changes. You can compare or explicitly reset a pinned key in
+**Settings → Note Colab → Trusted contacts** after verifying the fingerprint
+with that person outside Note Colab. First use still trusts the chosen server's
+directory response.
 
 ## Hosted service and storage
 
@@ -155,8 +159,7 @@ WebSocket contract.
 At a high level, a compatible deployment needs:
 
 - one public HTTPS origin for the web reader, `/api/v1/*`, and `/ws/*`;
-- persistent storage for users, encrypted note payloads, links, images, and Yjs
-  snapshots;
+- persistent storage for users, encrypted note payloads, links, and images;
 - `GET /api/v1/ping` for connection checks and `GET /api/v1/info` for server
   name, registration mode, plans, and feature discovery;
 - TLS, a CORS policy that permits `app://obsidian.md`, and a registration policy

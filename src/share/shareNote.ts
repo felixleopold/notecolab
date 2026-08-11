@@ -3,6 +3,7 @@ import type { ApiClient } from '../api/client';
 import type { ColabSettings, ShareResult } from '../types';
 import { deriveRoomToken, deriveWriteCapability, encrypt, generateKey, encryptBinary } from '../crypto/crypto';
 import { encryptKeyForRecipient } from '../crypto/keyExchange';
+import { DirectoryKeyChangedError } from '../crypto/identityTrust';
 import { parseFrontmatter, stopShareSync } from '../session/sessions';
 import { findImageEmbeds } from './imageEmbeds';
 
@@ -102,8 +103,12 @@ export async function shareNote(
             pendingShares.push({ recipientUid: collabUid, encryptedKey: ek, nonce });
             validCollaborators.push(collabUid);
           } catch (e) {
-            skippedCollaborators.push(collabUid);
             console.warn(`Failed to encrypt key for collaborator ${collabUid}:`, e);
+            if (e instanceof DirectoryKeyChangedError) {
+              new Notice(`${e.message}. Verify it with the recipient, then reset its pin in Note Colab settings.`, 15_000);
+            } else {
+              skippedCollaborators.push(collabUid);
+            }
           }
         }
       }

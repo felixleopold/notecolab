@@ -3,6 +3,7 @@ import ManageLinksComponent from '../components/ManageLinks.svelte';
 import type { ApiClient } from '../../api/client';
 import type { Contact } from '../../types';
 import { encryptKeyForRecipient } from '../../crypto/keyExchange';
+import { DirectoryKeyChangedError } from '../../crypto/identityTrust';
 
 export class ManageLinksModalView extends Modal {
   private component: InstanceType<typeof ManageLinksComponent> | null = null;
@@ -12,6 +13,19 @@ export class ManageLinksModalView extends Modal {
   private serverUrl: string;
   private contacts: Contact[];
   private secretKey: string;
+
+  private async trustedPublicKey(uid: string): Promise<string | null | undefined> {
+    try {
+      return (await this.api.getPublicKey(uid))?.publicKey || null;
+    } catch (error) {
+      if (error instanceof DirectoryKeyChangedError) {
+        console.error(error.message);
+        new Notice(`${error.message}. Verify it with the recipient, then reset its pin in Note Colab settings.`, 15_000);
+        return undefined;
+      }
+      throw error;
+    }
+  }
 
   constructor(
     app: App,
@@ -103,8 +117,9 @@ export class ManageLinksModalView extends Modal {
         linkShareId: string;
         accessMode: 'public_edit' | 'invited_edit' | 'read_only';
       };
-      const pubKeyInfo = await this.api.getPublicKey(uid);
-      if (!pubKeyInfo?.publicKey) {
+      const publicKey = await this.trustedPublicKey(uid);
+      if (publicKey === undefined) return;
+      if (!publicKey) {
         new Notice(`Skipped ${uid}: no public key - ask them to enable Note Colab first`);
         return;
       }
@@ -113,7 +128,7 @@ export class ManageLinksModalView extends Modal {
       try {
         encrypted = encryptKeyForRecipient(
           this.encryptionKey,
-          pubKeyInfo.publicKey,
+          publicKey,
           this.secretKey,
         );
       } catch (err) {
@@ -146,8 +161,9 @@ export class ManageLinksModalView extends Modal {
       const uid = e.detail.uid;
 
       // Encrypt the note key for the collaborator
-      const pubKeyInfo = await this.api.getPublicKey(uid);
-      if (!pubKeyInfo?.publicKey) {
+      const publicKey = await this.trustedPublicKey(uid);
+      if (publicKey === undefined) return;
+      if (!publicKey) {
         new Notice(`Skipped ${uid}: no public key - ask them to enable Note Colab first`);
         return;
       }
@@ -156,7 +172,7 @@ export class ManageLinksModalView extends Modal {
       try {
         encrypted = encryptKeyForRecipient(
           this.encryptionKey,
-          pubKeyInfo.publicKey,
+          publicKey,
           this.secretKey
         );
       } catch (err) {
@@ -192,8 +208,9 @@ export class ManageLinksModalView extends Modal {
 
     this.component.$on('resend-collaborator', async (e: CustomEvent) => {
       const uid = e.detail.uid;
-      const pubKeyInfo = await this.api.getPublicKey(uid);
-      if (!pubKeyInfo?.publicKey) {
+      const publicKey = await this.trustedPublicKey(uid);
+      if (publicKey === undefined) return;
+      if (!publicKey) {
         new Notice(`Cannot resend to ${uid}: no public key found`);
         return;
       }
@@ -201,7 +218,7 @@ export class ManageLinksModalView extends Modal {
       try {
         const encrypted = encryptKeyForRecipient(
           this.encryptionKey,
-          pubKeyInfo.publicKey,
+          publicKey,
           this.secretKey
         );
         const sent = await this.api.createPendingShares(this.noteShareId, [{

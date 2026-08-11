@@ -4,11 +4,16 @@ import { DEFAULT_SETTINGS, type Contact } from '../types';
 import { destroyAllShareSyncs } from '../session/sessions';
 import { ApiClient } from '../api/client';
 import { deriveVaultKey, encryptWithVaultKey } from '../crypto/crypto';
+import {
+  DirectoryKeyChangedError,
+  parseDirectoryIdentityId,
+  publicKeyFingerprint,
+} from '../crypto/identityTrust';
 
 /**
  * Only open http(s) checkout URLs. The URL is returned by the (user-configured,
  * possibly untrusted) server; a non-http scheme like obsidian:// or file:// must
- * never be handed to the OS protocol handler. (security audit #14)
+ * never be handed to the OS protocol handler.
  */
 function isSafeCheckoutUrl(url: string): boolean {
   try {
@@ -93,7 +98,7 @@ export class ColabSettingsTab extends PluginSettingTab {
             destroyAllShareSyncs(this.plugin.app);
             this.applyFreshIdentity(pendingUrl, identity);
             await this.plugin.saveSettings();
-            this.plugin.api = new ApiClient(this.plugin.settings);
+            this.plugin.api = new ApiClient(this.plugin.settings, () => this.plugin.saveSettings());
             new Notice('Connected to ' + pendingUrl);
           }
         } else {
@@ -147,7 +152,7 @@ export class ColabSettingsTab extends PluginSettingTab {
           this.plugin.settings.username = result.displayName || '';
           this.plugin.settings.usernamePromptState = result.displayName ? 'done' : 'after_shares';
           await this.plugin.saveSettings();
-          this.plugin.api = new ApiClient(this.plugin.settings);
+          this.plugin.api = new ApiClient(this.plugin.settings, () => this.plugin.saveSettings());
           new Notice('Account restored. The previous plugin credential is now invalid. Pending invitations encrypted for the old device may need to be resent.', 12_000);
           this.display();
         } catch (error) {
@@ -188,6 +193,23 @@ export class ColabSettingsTab extends PluginSettingTab {
           new Notice('User ID copied to clipboard');
         });
       });
+    }
+
+    if (this.plugin.settings.publicKey) {
+      let fingerprint = 'Invalid local identity key';
+      try {
+        fingerprint = publicKeyFingerprint(this.plugin.settings.publicKey);
+      } catch {
+        // Keep settings usable so account recovery remains available.
+      }
+      new Setting(containerEl)
+        .setName('Identity fingerprint')
+        .setDesc('Compare this with collaborators through another channel before they reset a changed key pin.')
+        .addText((text) => text.setValue(fingerprint).setDisabled(true))
+        .addButton((btn) => btn.setButtonText('Copy').onClick(() => {
+          navigator.clipboard.writeText(fingerprint);
+          new Notice('Identity fingerprint copied');
+        }));
     }
 
     let pendingUsername = this.plugin.settings.username;
@@ -387,7 +409,7 @@ export class ColabSettingsTab extends PluginSettingTab {
             if (result?.apiKey) {
               this.plugin.settings.apiKey = result.apiKey;
               await this.plugin.saveSettings();
-              this.plugin.api = new ApiClient(this.plugin.settings);
+              this.plugin.api = new ApiClient(this.plugin.settings, () => this.plugin.saveSettings());
               new Notice('API key rotated. The new key has been saved.');
             } else {
               new Notice('Failed to rotate API key');
@@ -418,7 +440,7 @@ export class ColabSettingsTab extends PluginSettingTab {
               destroyAllShareSyncs(this.plugin.app);
               this.applyFreshIdentity(this.plugin.settings.serverUrl, identity);
               await this.plugin.saveSettings();
-              this.plugin.api = new ApiClient(this.plugin.settings);
+              this.plugin.api = new ApiClient(this.plugin.settings, () => this.plugin.saveSettings());
               new Notice('New account created. The previous account was not deleted or transferred.');
               this.display();
             }
@@ -484,6 +506,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     this.plugin.settings.publicKey = identity.publicKey;
     this.plugin.settings.secretKey = identity.secretKey;
     this.plugin.settings.contacts = [];
+    this.plugin.settings.pinnedPublicKeys = {};
     this.plugin.settings.vaultKey = DEFAULT_SETTINGS.vaultKey;
     this.plugin.settings.username = DEFAULT_SETTINGS.username;
     this.plugin.settings.usernamePromptState = DEFAULT_SETTINGS.usernamePromptState;
@@ -650,6 +673,34 @@ export class ColabSettingsTab extends PluginSettingTab {
         });
     }
 
+    const pins = Object.entries(this.plugin.settings.pinnedPublicKeys || {});
+    if (pins.length > 0) {
+      container.createEl('p', {
+        text: 'Pinned identity keys detect unexpected directory changes. Compare fingerprints with contacts outside Note Colab before resetting a changed key.',
+        cls: 'setting-item-description',
+      });
+      for (const [id, publicKey] of pins) {
+        const identity = parseDirectoryIdentityId(id);
+        const contact = contacts.find((candidate) => candidate.uid === identity.uid);
+        new Setting(container)
+          .setName(`Key: ${contact?.name || identity.uid.substring(0, 12)}`)
+          .setDesc(`${identity.server} · ${publicKeyFingerprint(publicKey)}`)
+          .addButton((btn) => {
+            btn.setButtonText('Reset pin').setWarning().onClick(async () => {
+              const confirmed = await this.confirmAction(
+                'Reset trusted identity key?',
+                `Only continue after verifying the new fingerprint with ${contact?.name || identity.uid} outside Note Colab. The next directory lookup will trust and pin the key currently supplied by ${identity.server}.`,
+                'Reset pin',
+              );
+              if (!confirmed) return;
+              delete this.plugin.settings.pinnedPublicKeys[id];
+              await this.plugin.saveSettings();
+              this.renderContacts(container);
+            });
+          });
+      }
+    }
+
     // Add contact form
     let newAlias = '';
     let newUid = '';
@@ -676,7 +727,15 @@ export class ColabSettingsTab extends PluginSettingTab {
             return;
           }
           // Verify the user exists by checking their public key
-          const info = await this.plugin.api.getPublicKey(newUid);
+          let info;
+          try {
+            info = await this.plugin.api.getPublicKey(newUid);
+          } catch (error) {
+            new Notice(error instanceof DirectoryKeyChangedError
+              ? `${error.message}. Verify it with the contact before resetting the pin above.`
+              : 'Could not verify the contact identity key', 15_000);
+            return;
+          }
           if (!info) {
             new Notice('User not found. Make sure they have the plugin installed.');
             return;

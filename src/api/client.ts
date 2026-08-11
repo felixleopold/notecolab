@@ -1,6 +1,7 @@
 import { requestUrl } from 'obsidian';
 import type { ColabSettings, NoteContent, SessionInfo } from '../types';
 import { requestHeaders } from './credentials';
+import { directoryIdentityId, pinDirectoryPublicKey } from '../crypto/identityTrust';
 
 export class ApiClient {
   /**
@@ -12,7 +13,10 @@ export class ApiClient {
   private includeCredentials = true;
   private writeCapability?: string;
 
-  constructor(private settings: ColabSettings) {}
+  constructor(
+    private settings: ColabSettings,
+    private persistSettings?: () => Promise<void>,
+  ) {}
 
   /** Base URL every request targets: a foreign-origin override, or the configured server. */
   private get baseUrl(): string {
@@ -27,7 +31,7 @@ export class ApiClient {
    * token without a home-server account, so no federation is needed. (issue #8)
    */
   withBaseUrl(baseUrl: string): ApiClient {
-    const clone = new ApiClient(this.settings);
+    const clone = new ApiClient(this.settings, this.persistSettings);
     clone.baseOverride = baseUrl.replace(/\/+$/, '');
     clone.includeCredentials = false;
     clone.writeCapability = this.writeCapability;
@@ -36,7 +40,7 @@ export class ApiClient {
 
   /** Attach the key-derived capability used for anonymous public-edit writes. */
   withWriteCapability(writeCapability: string): ApiClient {
-    const clone = new ApiClient(this.settings);
+    const clone = new ApiClient(this.settings, this.persistSettings);
     clone.baseOverride = this.baseOverride;
     clone.includeCredentials = this.includeCredentials;
     clone.writeCapability = writeCapability;
@@ -548,16 +552,38 @@ export class ApiClient {
   }
 
   async getPublicKey(uid: string): Promise<{ publicKey: string; displayName: string | null } | null> {
+    let info: { publicKey: string; displayName: string | null };
     try {
       const res = await requestUrl({
         url: `${this.baseUrl}/api/v1/auth/public-key/${encodeURIComponent(uid)}`,
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      info = res.json;
     } catch {
       return null;
     }
+
+    this.settings.pinnedPublicKeys ||= {};
+    const status = pinDirectoryPublicKey(
+      this.settings.pinnedPublicKeys,
+      this.baseUrl,
+      uid,
+      info.publicKey,
+    );
+    if (status === 'pinned') {
+      if (!this.persistSettings) {
+        delete this.settings.pinnedPublicKeys[directoryIdentityId(this.baseUrl, uid)];
+        throw new Error('Could not persist the first-use identity key pin');
+      }
+      try {
+        await this.persistSettings();
+      } catch (error) {
+        delete this.settings.pinnedPublicKeys[directoryIdentityId(this.baseUrl, uid)];
+        throw error;
+      }
+    }
+    return info;
   }
 
   async getMyProfile(): Promise<{ uid: string; displayName: string | null } | null> {

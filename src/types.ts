@@ -27,6 +27,8 @@ export interface ColabSettings {
   // `serverUrl` (cross-server share links). Each is a full origin, e.g.
   // "https://serverA.com". Used to skip the trust prompt on repeat imports.
   trustedShareHosts: string[];
+  // Server-origin + UID scoped X25519 directory keys, pinned on first use.
+  pinnedPublicKeys: Record<string, string>;
 }
 
 export const OFFICIAL_SERVER_URL = 'https://notecolab.com';
@@ -68,6 +70,7 @@ export const DEFAULT_SETTINGS: ColabSettings = {
   autoImport: false,
   vaultKey: '',
   trustedShareHosts: [],
+  pinnedPublicKeys: {},
 };
 
 export interface ShareResult {

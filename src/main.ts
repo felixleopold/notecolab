@@ -15,6 +15,7 @@ import { shareNote, revokeShare, copyShareLink } from './share/shareNote';
 import { importNote, foreignOrigin } from './share/importNote';
 import { startShareSync, getShareSync, getShareSyncShareId, getShareSyncPathByShareId, getShareSyncStatus, stopShareSync, destroyAllShareSyncs, publishSnapshot, cancelSnapshot, renameShareSync, parseFrontmatter } from './session/sessions';
 import { generateKeyPair, decryptKeyFromSender } from './crypto/keyExchange';
+import { DirectoryKeyChangedError } from './crypto/identityTrust';
 import { decrypt, encrypt } from './crypto/crypto';
 import { ShareModalView } from './ui/views/ShareModalView';
 import { ImportModal } from './ui/ImportModal';
@@ -87,6 +88,7 @@ export default class ColabPlugin extends Plugin {
   // Incoming-share accept/deny queue (one popup shown at a time)
   private incomingShareQueue: IncomingShare[] = [];
   private promptedPendingShares = new Set<number>();
+  private warnedChangedIdentityKeys = new Set<string>();
   private showingIncomingModal = false;
   private duplicateSyncWarnings = new Set<string>();
   private readOnlyRefreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -101,7 +103,7 @@ export default class ColabPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-    this.api = new ApiClient(this.settings);
+    this.api = new ApiClient(this.settings, () => this.saveSettings());
 
     // Ensure we have a keypair (for users who registered before this feature)
     if (this.settings.apiKey && !this.settings.publicKey) {
@@ -847,6 +849,7 @@ export default class ColabPlugin extends Plugin {
   async loadSettings() {
     const saved = await this.loadData() as Partial<ColabSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    this.settings.pinnedPublicKeys = { ...(saved?.pinnedPublicKeys || {}) };
     this.settings.usernamePromptState = initialUsernamePromptState(saved);
     if (saved?.serverUrl && migrateOfficialServerUrl(saved.serverUrl) !== saved.serverUrl) {
       this.settings.serverUrl = migrateOfficialServerUrl(saved.serverUrl);
@@ -1070,7 +1073,20 @@ export default class ColabPlugin extends Plugin {
         }
 
         // Decrypt the AES key using our secret key + sender's public key
-        const senderInfo = await this.api.getPublicKey(ps.senderUid);
+        let senderInfo;
+        try {
+          senderInfo = await this.api.getPublicKey(ps.senderUid);
+        } catch (error) {
+          if (error instanceof DirectoryKeyChangedError) {
+            console.error(error.message);
+            if (!this.warnedChangedIdentityKeys.has(ps.senderUid)) {
+              this.warnedChangedIdentityKeys.add(ps.senderUid);
+              new Notice(`${error.message}. Verify it with the sender, then reset its pin in Note Colab settings.`, 15_000);
+            }
+            continue;
+          }
+          throw error;
+        }
         if (!senderInfo?.publicKey) {
           console.warn(`Cannot decrypt pending share from ${ps.senderUid}: no public key`);
           continue;

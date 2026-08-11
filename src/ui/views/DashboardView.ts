@@ -3,6 +3,7 @@ import Dashboard from '../components/Dashboard.svelte';
 import type ColabPlugin from '../../main';
 import { decrypt, encrypt } from '../../crypto/crypto';
 import { decryptKeyFromSender } from '../../crypto/keyExchange';
+import { DirectoryKeyChangedError } from '../../crypto/identityTrust';
 import { stopShareSync } from '../../session/sessions';
 
 export const DASHBOARD_VIEW_TYPE = 'notecolab-dashboard';
@@ -157,7 +158,13 @@ export class DashboardView extends ItemView {
       const pending = await Promise.all(pendingShares.map(async (share) => {
         let title: string | null = share.title;
         if (share.encryptedTitle && this.plugin.settings.secretKey) {
-          const senderInfo = await this.plugin.api.getPublicKey(share.senderUid);
+          const senderInfo = await this.plugin.api.getPublicKey(share.senderUid).catch((error: unknown) => {
+            if (error instanceof DirectoryKeyChangedError) {
+              console.error(error.message);
+              return null;
+            }
+            throw error;
+          });
           if (senderInfo?.publicKey) {
             const noteKey = decryptKeyFromSender(
               share.encryptedKey,
@@ -327,7 +334,9 @@ export class DashboardView extends ItemView {
       await this.loadData();
     } catch (e) {
       console.error('Failed to import share:', e);
-      new Notice('Failed to import shared note');
+      new Notice(e instanceof DirectoryKeyChangedError
+        ? `${e.message}. Verify it with the sender, then reset its pin in Note Colab settings.`
+        : 'Failed to import shared note', 15_000);
     }
   }
 
