@@ -6,7 +6,7 @@ import { decryptBinary } from '../crypto/crypto';
  * Reduce a share-supplied embed name to a plain filename we can safely write.
  * `normalizePath` does NOT resolve `..`, so a name like `../../evil.png` would
  * otherwise escape the target folder — take the last path segment only and
- * reject anything that isn't a real filename. (security audit #5)
+ * reject anything that isn't a real filename.
  */
 function safeAssetName(name: string): string | null {
   const base = (name.split(/[\\/]/).pop() || '').trim();

@@ -136,7 +136,6 @@ export async function importNote(
     // Create a new file in the vault. The title comes from the sharer, so
     // sanitize it to a bare filename — `normalizePath` does not resolve `..`, so
     // a title like `../../evil` would otherwise write outside 'Shared Notes'.
-    // (security audit #5)
     let rawTitle = note.title;
     if (note.encryptedTitle) {
       try {

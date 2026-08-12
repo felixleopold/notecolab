@@ -19,6 +19,7 @@ export interface ColabSettings {
   username: string;
   usernamePromptState: 'upgrade' | 'after_shares' | 'done';
   sharedNoteCount: number;
+  onboardingState: 'pending' | 'done';
   // Auto-accept notes shared with me (skip the accept/deny popup)
   autoImport: boolean;
   // PBKDF2-derived vault key for web dashboard access (base64url, memory-safe)
@@ -54,6 +55,11 @@ export function initialUsernamePromptState(saved: Partial<ColabSettings> | null)
   return saved?.usernamePromptState || 'after_shares';
 }
 
+export function initialOnboardingState(saved: Partial<ColabSettings> | null): ColabSettings['onboardingState'] {
+  if (saved?.onboardingState) return saved.onboardingState;
+  return saved === null ? 'pending' : 'done';
+}
+
 export const DEFAULT_SETTINGS: ColabSettings = {
   serverUrl: OFFICIAL_SERVER_URL,
   apiKey: '',
@@ -67,6 +73,7 @@ export const DEFAULT_SETTINGS: ColabSettings = {
   username: '',
   usernamePromptState: 'after_shares',
   sharedNoteCount: 0,
+  onboardingState: 'pending',
   autoImport: false,
   vaultKey: '',
   trustedShareHosts: [],

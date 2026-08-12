@@ -39,13 +39,15 @@ you control.
 
 ## Set up Note Colab
 
-Note Colab uses `https://notecolab.com` by default. Connecting creates an
-anonymous identity for that server; no email address is required.
+Note Colab uses `https://notecolab.com` by default. On a fresh installation it
+connects automatically and creates an anonymous identity for that server; no
+email address is required. A short onboarding guide then walks you through
+sharing your first note.
 
-1. Open **Settings → Note Colab**.
-2. Confirm that **Server URL** says `https://notecolab.com`, then select
-   **Connect**. Note Colab checks the server and registers your anonymous
-   server-local identity.
+1. Follow the onboarding guide, or open a note and run **Note Colab: Share
+   note** from the command palette.
+2. Open **Settings → Note Colab** if you want to review your connection or
+   change sharing defaults.
 3. Copy your **User ID** if you want other people to invite you directly. You
    can also add an optional public username to make that ID easier to recognise.
 4. Choose the default access mode and link expiry you want for new shares.
@@ -64,7 +66,8 @@ on the configured server's website.
 ## Share your first note
 
 1. Open the note you want to share.
-2. Open the command palette and run **Note Colab: Share note**, or open the
+2. Open the command palette with **Ctrl/Cmd+P** and run **Note Colab: Share
+   note**, or open the
    Note Colab dashboard from the ribbon.
 3. Choose an access mode:
 

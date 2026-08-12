@@ -18,8 +18,10 @@
   export let contacts: Contact[] = [];
   export let collaborators: string[] = [];
   export let submitting = false;
+  export let simple = false;
 
   let collabInput = '';
+  let showAdvanced = !simple || accessMode === 'invited_edit';
 
   function addCollaborator(uid: string) {
     if (uid && !collaborators.includes(uid)) {
@@ -53,14 +55,18 @@
 </script>
 
 <div class="share-note">
-  <h2 class="share-heading">Share Note</h2>
+  <h2 class="share-heading">{simple ? 'Who should be able to use this note?' : 'Share Note'}</h2>
+  {#if simple}
+    <p class="share-intro">You can change or revoke access at any time.</p>
+  {/if}
 
   <!-- Access Mode -->
   <div class="share-field">
     <span class="share-label">Access mode</span>
     <p class="share-hint">
-      View-only and editable modes create a web link. Every mode can also be
-      delivered directly to another person's Obsidian by User ID.
+      {simple && !showAdvanced
+        ? 'Start with a web link. You can open more options for invited people, expiry, and appearance.'
+        : "View-only and editable modes create a web link. Every mode can also be delivered directly to another person's Obsidian by User ID."}
     </p>
     <div class="access-options" role="radiogroup" aria-label="Access mode">
       <button
@@ -73,7 +79,9 @@
       >
         <span class="access-icon">👁</span>
         <span class="access-name">View-only link</span>
-        <span class="access-desc">View on the web; UID recipients get a read-only Obsidian mirror</span>
+        <span class="access-desc">{simple && !showAdvanced
+          ? 'Best for sending a finished note. Expires in 24 hours by default.'
+          : 'View on the web; UID recipients get a read-only Obsidian mirror'}</span>
       </button>
       <button
         type="button"
@@ -85,8 +93,11 @@
       >
         <span class="access-icon">🌐</span>
         <span class="access-name">Editable link</span>
-        <span class="access-desc">Anyone with the link can edit on the web or in Obsidian</span>
+        <span class="access-desc">{simple && !showAdvanced
+          ? 'Best for working on a note together in real time.'
+          : 'Anyone with the link can edit on the web or in Obsidian'}</span>
       </button>
+      {#if showAdvanced}
       <button
         type="button"
         role="radio"
@@ -99,10 +110,12 @@
         <span class="access-name">Invited collaborators</span>
         <span class="access-desc">Only people you invite can open and edit the note</span>
       </button>
+      {/if}
     </div>
   </div>
 
   <!-- Direct Obsidian delivery -->
+  {#if showAdvanced}
   <div class="share-field">
       <span class="share-label">Send directly to Obsidian (optional)</span>
       <p class="share-hint">
@@ -149,9 +162,10 @@
         </button>
       </div>
   </div>
+  {/if}
 
   <!-- Expiry (hidden for invite-only since access is by collaborator status) -->
-  {#if accessMode !== 'invited_edit'}
+  {#if showAdvanced && accessMode !== 'invited_edit'}
   <div class="share-field">
     <label class="share-label" for="link-expiry">Link expiry</label>
     <select id="link-expiry" bind:value={expiresIn} class="share-select">
@@ -165,6 +179,7 @@
   {/if}
 
   <!-- Web appearance -->
+  {#if showAdvanced}
   <div class="share-field">
     <span class="share-label">{accessMode === 'read_only' ? 'Reader view' : 'Web appearance'}</span>
     <p class="share-hint">
@@ -197,9 +212,10 @@
     </label>
     {/if}
   </div>
+  {/if}
 
   <!-- Show Help (hidden for invite-only) -->
-  {#if accessMode !== 'invited_edit'}
+  {#if showAdvanced && accessMode !== 'invited_edit'}
   <div class="share-field share-toggle-row">
     <label class="share-label" for="show-help">Show help guide to recipient</label>
     <label class="toggle-switch">
@@ -207,6 +223,12 @@
       <span class="toggle-slider"></span>
     </label>
   </div>
+  {/if}
+
+  {#if simple && !showAdvanced}
+    <button type="button" class="more-options" on:click={() => showAdvanced = true}>
+      More options: invited people, expiry, and web appearance
+    </button>
   {/if}
 
   <!-- Submit -->
@@ -217,7 +239,7 @@
       {:else if accessMode === 'invited_edit'}
         Share with invited collaborators
       {:else}
-        Share & copy web link
+        {simple ? 'Create link and copy it' : 'Share & copy web link'}
       {/if}
     </button>
   </div>
@@ -234,6 +256,28 @@
     margin: 0 0 16px;
     font-size: var(--font-ui-large);
     font-weight: 600;
+  }
+
+  .share-intro {
+    color: var(--text-muted);
+    margin: -10px 0 18px;
+  }
+
+  .more-options {
+    display: block;
+    width: 100%;
+    margin: -2px 0 18px;
+    padding: 8px 0;
+    border: 0;
+    border-top: 1px solid var(--background-modifier-border);
+    background: transparent;
+    color: var(--text-muted);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .more-options:hover {
+    color: var(--interactive-accent);
   }
 
   .share-field {

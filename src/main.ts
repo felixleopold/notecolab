@@ -1,15 +1,15 @@
 import {
+  Menu,
   Notice,
   Plugin,
   editorInfoField,
-  MarkdownView,
   normalizePath,
+  setIcon,
   TFile,
-  type MarkdownFileInfo,
   type WorkspaceLeaf,
 } from 'obsidian';
 import { EditorView, showPanel, type Panel } from '@codemirror/view';
-import { DEFAULT_SETTINGS, initialUsernamePromptState, migrateOfficialServerUrl, type ColabSettings } from './types';
+import { DEFAULT_SETTINGS, OFFICIAL_SERVER_URL, initialOnboardingState, initialUsernamePromptState, migrateOfficialServerUrl, type ColabSettings } from './types';
 import { ApiClient } from './api/client';
 import { shareNote, revokeShare, copyShareLink } from './share/shareNote';
 import { importNote, foreignOrigin } from './share/importNote';
@@ -32,7 +32,6 @@ import {
   isReadOnlyRecipient,
   stripColabMetadata,
 } from './share/readOnlyMirror';
-import { ReadOnlyMirrorModal } from './ui/ReadOnlyMirrorModal';
 import { DeleteReadOnlyMirrorModal } from './ui/DeleteReadOnlyMirrorModal';
 import { UsernamePromptModal } from './ui/UsernamePromptModal';
 import {
@@ -46,6 +45,7 @@ import {
   type ShareOwnership,
 } from './share/shareOwnership';
 import { noteColabFrontmatter } from './share/frontmatter';
+import { OnboardingModal } from './ui/OnboardingModal';
 
 /** A decrypted incoming share awaiting the user's accept/deny decision. */
 interface IncomingShare {
@@ -94,13 +94,14 @@ export default class ColabPlugin extends Plugin {
   private duplicateSyncWarnings = new Set<string>();
   private readOnlyRefreshInterval: number | null = null;
   private refreshingReadOnlyMirrors = new Set<string>();
-  private readOnlyPromptedAt = new Map<string, number>();
   private suppressedDeletionPrompts = new Set<string>();
   private allowedReadOnlyRenames = new Set<string>();
   // Storage warnings — throttle checks and only re-warn when usage worsens
   private lastStorageCheck = 0;
   private lastStorageLevel: StorageLevel = 'ok';
   private usernamePromptOpen = false;
+  private automaticConnection: Promise<boolean> | null = null;
+  private onboardingOpen = false;
 
   async onload() {
     await this.loadSettings();
@@ -140,6 +141,7 @@ export default class ColabPlugin extends Plugin {
       if (this.settings.usernamePromptState === 'upgrade') {
         void this.maybePromptForUsername('upgrade');
       }
+      void this.maybeStartOnboarding();
     });
     this.registerReadOnlyMirrorUi();
 
@@ -345,7 +347,6 @@ export default class ColabPlugin extends Plugin {
         if (file) {
           this.maybePublishReadOnly(file);
           void this.refreshReadOnlyMirror(file);
-          void this.openReadOnlyMirrorInReadingView();
         }
       })
     );
@@ -357,7 +358,6 @@ export default class ColabPlugin extends Plugin {
       if (file) {
         this.maybePublishReadOnly(file);
         void this.refreshReadOnlyMirror(file);
-        void this.openReadOnlyMirrorInReadingView();
       }
     });
 
@@ -432,7 +432,6 @@ export default class ColabPlugin extends Plugin {
         this.app.workspace.updateOptions();
         if (this.isReadOnlyMirror(file)
             && this.app.workspace.getActiveFile()?.path === file.path) {
-          void this.openReadOnlyMirrorInReadingView();
           void this.refreshReadOnlyMirror(file);
         }
       })
@@ -440,11 +439,6 @@ export default class ColabPlugin extends Plugin {
   }
 
   private registerReadOnlyMirrorUi(): void {
-    const editorFile = (view: EditorView): TFile | null => {
-      const info: MarkdownFileInfo = view.state.field(editorInfoField);
-      return info.file;
-    };
-
     this.registerEditorExtension([
       EditorView.editable.compute([editorInfoField], (state) => {
         const file = state.field(editorInfoField).file;
@@ -455,46 +449,21 @@ export default class ColabPlugin extends Plugin {
         if (!file || !this.isReadOnlyMirror(file)) return null;
         return () => this.createReadOnlyPanel(file);
       }),
-      EditorView.domEventHandlers({
-        keydown: (event, view) => {
-          const file = editorFile(view);
-          if (!file || !this.isReadOnlyMirror(file)) return false;
-          const editingShortcut = (event.metaKey || event.ctrlKey)
-            && ['v', 'x', 'z', 'y'].includes(event.key.toLowerCase());
-          const editingKey = event.key.length === 1
-            || ['Backspace', 'Delete', 'Enter', 'Tab'].includes(event.key);
-          if (!editingShortcut && !editingKey) return false;
-          this.promptReadOnlyEdit(file);
-          return true;
-        },
-        paste: (_event, view) => {
-          const file = editorFile(view);
-          if (!file || !this.isReadOnlyMirror(file)) return false;
-          this.promptReadOnlyEdit(file);
-          return true;
-        },
-        drop: (_event, view) => {
-          const file = editorFile(view);
-          if (!file || !this.isReadOnlyMirror(file)) return false;
-          this.promptReadOnlyEdit(file);
-          return true;
-        },
-      }),
     ]);
 
     this.registerMarkdownPostProcessor((el, context) => {
       const file = this.app.vault.getFileByPath(context.sourcePath);
       if (!file || !this.isReadOnlyMirror(file)) return;
-      const root = el.closest('.markdown-preview-view') || el;
-      if (root.querySelector(':scope > .notecolab-read-only-banner')) return;
-      root.prepend(this.createReadOnlyBanner(file));
+      const mountBanner = () => {
+        const root = el.closest('.markdown-preview-view');
+        if (!root || root.querySelector('.notecolab-read-only-banner')) return false;
+        root.prepend(this.createReadOnlyBanner(file));
+        return true;
+      };
+      if (!mountBanner()) {
+        window.requestAnimationFrame(() => mountBanner());
+      }
     });
-  }
-
-  private async openReadOnlyMirrorInReadingView(): Promise<void> {
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!view?.file || !this.isReadOnlyMirror(view.file) || view.getMode() === 'preview') return;
-    await view.setState({ ...view.getState(), mode: 'preview' }, { history: false });
   }
 
   private createReadOnlyPanel(file: TFile): Panel {
@@ -507,68 +476,102 @@ export default class ColabPlugin extends Plugin {
   private createReadOnlyBanner(file: TFile): HTMLElement {
     const banner = createDiv();
     banner.className = 'notecolab-read-only-banner';
+    banner.dataset.path = file.path;
     banner.setCssStyles({
       display: 'flex',
       alignItems: 'center',
-      justifyContent: 'space-between',
       flexWrap: 'wrap',
-      gap: '12px',
+      gap: '10px',
       padding: '8px 12px',
       borderBottom: '1px solid var(--background-modifier-border)',
       background: 'var(--background-secondary)',
+      position: 'sticky',
+      top: '0',
+      zIndex: '1',
+    });
+
+    const lock = banner.createSpan();
+    setIcon(lock, 'lock');
+    lock.setCssStyles({
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '28px',
+      height: '28px',
+      borderRadius: 'var(--radius-s)',
+      background: 'var(--background-modifier-hover)',
+      flexShrink: '0',
     });
 
     const message = banner.createDiv();
-    message.createEl('strong', { text: 'Read-only shared note' });
+    message.setCssStyles({ flex: '1 1 280px', minWidth: '0' });
+    const heading = message.createDiv();
+    heading.setCssStyles({ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '8px' });
+    heading.createEl('strong', { text: 'Read-only mirror' });
+    const status = heading.createSpan({ cls: 'notecolab-read-only-status' });
+    status.setCssStyles({ color: 'var(--color-green)', fontSize: 'var(--font-ui-smaller)' });
     const description = message.createDiv({
-      text: 'Updates from the owner are applied automatically. Create a local copy to make changes.',
+      text: 'Updates from the owner sync automatically. Any changes to this file are temporary and will be replaced by the owner’s version.',
     });
-    description.setCssStyles({ color: 'var(--text-muted)' });
+    description.setCssStyles({ color: 'var(--text-muted)', fontSize: 'var(--font-ui-smaller)' });
 
     const actions = banner.createDiv();
     actions.setCssStyles({
       display: 'flex',
-      flexWrap: 'wrap',
       gap: '6px',
       flexShrink: '0',
     });
 
-    const remove = actions.createEl('button', { text: 'Delete & stop updates' });
-    remove.addEventListener('click', () => this.confirmDeleteReadOnlyMirror(file));
-
     const copy = actions.createEl('button', {
-      text: 'Create editable copy',
+      text: 'Make a copy',
       cls: 'mod-cta',
     });
     copy.addEventListener('click', () => void this.createEditableCopy(file));
+
+    const more = actions.createEl('button', {
+      attr: {
+        'aria-label': 'More actions for read-only mirror',
+        'data-tooltip-position': 'top',
+      },
+    });
+    setIcon(more, 'more-horizontal');
+    more.addEventListener('click', (event) => {
+      const menu = new Menu();
+      menu.addItem((item) => item
+        .setTitle('Delete and stop updates')
+        .setIcon('trash-2')
+        .onClick(() => this.confirmDeleteReadOnlyMirror(file)));
+      menu.showAtMouseEvent(event);
+    });
+
+    this.updateReadOnlyBanner(banner, file.path);
     return banner;
+  }
+
+  private updateReadOnlyBanner(banner: HTMLElement, path: string): void {
+    const status = banner.querySelector<HTMLElement>('.notecolab-read-only-status');
+    if (!status) return;
+    status.setText(this.refreshingReadOnlyMirrors.has(path) ? 'Updating…' : '✓ Synced');
+  }
+
+  private updateReadOnlyBanners(path: string): void {
+    document.querySelectorAll<HTMLElement>('.notecolab-read-only-banner').forEach((banner) => {
+      if (banner.dataset.path === path) this.updateReadOnlyBanner(banner, path);
+    });
   }
 
   private isReadOnlyMirror(file: TFile): boolean {
     return isReadOnlyRecipient(noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter));
   }
 
-  private promptReadOnlyEdit(file: TFile): void {
-    const now = Date.now();
-    if (now - (this.readOnlyPromptedAt.get(file.path) || 0) < 3000) return;
-    this.readOnlyPromptedAt.set(file.path, now);
-    new ReadOnlyMirrorModal(
-      this.app,
-      file,
-      () => void this.createEditableCopy(file),
-      () => this.confirmDeleteReadOnlyMirror(file),
-    ).open();
-  }
-
   private async restoreReadOnlyMirrorName(file: TFile, oldPath: string): Promise<void> {
     if (this.app.vault.getAbstractFileByPath(oldPath)) {
-      this.promptReadOnlyEdit(file);
+      new Notice('This read-only mirror keeps the owner’s filename. Make a copy to rename it.');
       return;
     }
     this.allowedReadOnlyRenames.add(oldPath);
     await this.app.fileManager.renameFile(file, oldPath);
-    const restored = this.app.vault.getFileByPath(oldPath);
-    if (restored) this.promptReadOnlyEdit(restored);
+    new Notice('This read-only mirror keeps the owner’s filename. Make a copy to rename it.');
   }
 
   private async createEditableCopy(file: TFile): Promise<void> {
@@ -628,6 +631,8 @@ export default class ColabPlugin extends Plugin {
     if (!roomId || !linkShareId || !encryptionKey) return;
 
     this.refreshingReadOnlyMirrors.add(file.path);
+    this.updateReadOnlyBanners(file.path);
+    this.updateStatusBar();
     try {
       const api = this.apiFor(fm?.colab_link);
       const note = await api.getNoteContent(linkShareId);
@@ -706,13 +711,19 @@ export default class ColabPlugin extends Plugin {
     } finally {
       this.refreshingReadOnlyMirrors.delete(startingPath);
       this.refreshingReadOnlyMirrors.delete(file.path);
+      this.updateReadOnlyBanners(startingPath);
+      this.updateReadOnlyBanners(file.path);
+      this.updateStatusBar();
     }
   }
 
-  shareCurrentNote(): void {
+  async shareCurrentNote(): Promise<void> {
     if (!this.settings.apiKey) {
-      new Notice('Connect to a Note Colab server in Settings → Note Colab before sharing');
-      return;
+      const connected = await this.ensureAutomaticConnection();
+      if (!connected) {
+        new Notice('Note Colab could not connect automatically. Check the server in Settings → Note Colab.');
+        return;
+      }
     }
 
     const file = this.app.workspace.getActiveFile();
@@ -727,6 +738,7 @@ export default class ColabPlugin extends Plugin {
       return;
     }
 
+    const firstShare = this.settings.onboardingState === 'pending';
     new ShareModalView(this.app, {
       accessMode: this.settings.defaultAccessMode,
       expiresIn: this.settings.defaultTtlSeconds,
@@ -768,6 +780,7 @@ export default class ColabPlugin extends Plugin {
       // After uploading content + images, check whether storage is full.
       if (result) {
         this.settings.sharedNoteCount += 1;
+        this.settings.onboardingState = 'done';
         await this.saveSettings();
         void this.maybeWarnStorage(true);
         if (this.settings.usernamePromptState === 'after_shares' && this.settings.sharedNoteCount >= 3) {
@@ -784,7 +797,7 @@ export default class ColabPlugin extends Plugin {
           new Notice('Invite link copied to clipboard!\nShare it with anyone you want to invite.');
         }
       }
-    })(); }).open();
+    })(); }, firstShare).open();
   }
 
   private openManageLinks(file: TFile): void {
@@ -854,6 +867,7 @@ export default class ColabPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.settings.pinnedPublicKeys = { ...(saved?.pinnedPublicKeys || {}) };
     this.settings.usernamePromptState = initialUsernamePromptState(saved);
+    this.settings.onboardingState = initialOnboardingState(saved);
     if (saved?.serverUrl && migrateOfficialServerUrl(saved.serverUrl) !== saved.serverUrl) {
       this.settings.serverUrl = migrateOfficialServerUrl(saved.serverUrl);
       await this.saveSettings();
@@ -862,6 +876,58 @@ export default class ColabPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  private async ensureAutomaticConnection(): Promise<boolean> {
+    if (this.settings.apiKey) return true;
+    if (this.settings.onboardingState !== 'pending' || this.settings.serverUrl !== OFFICIAL_SERVER_URL) return false;
+    if (this.automaticConnection) return this.automaticConnection;
+
+    const connection = (async () => {
+      try {
+        const info = await this.api.getServerInfo();
+        if (info?.registration?.mode && info.registration.mode !== 'open') return false;
+        const keyPair = generateKeyPair();
+        const identity = await this.api.register(keyPair.publicKey);
+        this.settings.uid = identity.uid;
+        this.settings.apiKey = identity.apiKey;
+        this.settings.publicKey = keyPair.publicKey;
+        this.settings.secretKey = keyPair.secretKey;
+        await this.saveSettings();
+        this.updateStatusBar();
+        return true;
+      } catch (error) {
+        console.warn('Note Colab automatic connection failed:', error);
+        return false;
+      } finally {
+        this.automaticConnection = null;
+      }
+    })();
+    this.automaticConnection = connection;
+
+    return connection;
+  }
+
+  private async maybeStartOnboarding(): Promise<void> {
+    if (this.onboardingOpen || this.settings.onboardingState !== 'pending') return;
+    if (!await this.ensureAutomaticConnection()) {
+      new Notice('Note Colab could not connect automatically. You can retry from Settings → Note Colab.');
+      return;
+    }
+
+    this.onboardingOpen = true;
+    new OnboardingModal(this.app, {
+      serverUrl: this.settings.serverUrl,
+      onShare: () => {
+        this.onboardingOpen = false;
+        void this.shareCurrentNote();
+      },
+      onDone: async () => {
+        this.onboardingOpen = false;
+        this.settings.onboardingState = 'done';
+        await this.saveSettings();
+      },
+    }).open();
   }
 
   private async maybePromptForUsername(reason: 'upgrade' | 'after_shares'): Promise<void> {

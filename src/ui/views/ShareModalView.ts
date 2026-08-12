@@ -20,7 +20,7 @@ export class ShareModalView extends Modal {
   private contacts: Contact[];
   private onSubmit: (result: ShareOptions) => void;
 
-  constructor(app: App, defaults: ShareOptions, contacts: Contact[], onSubmit: (result: ShareOptions) => void) {
+  constructor(app: App, defaults: ShareOptions, contacts: Contact[], onSubmit: (result: ShareOptions) => void, private simple = false) {
     super(app);
     this.defaults = defaults;
     this.contacts = contacts;
@@ -47,6 +47,7 @@ export class ShareModalView extends Modal {
         contacts: this.contacts,
         collaborators: [...(this.defaults.collaborators || [])],
         submitting: false,
+        simple: this.simple,
       },
     });
 
