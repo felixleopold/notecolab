@@ -4,8 +4,8 @@ import {
   editorInfoField,
   MarkdownView,
   normalizePath,
+  TFile,
   type MarkdownFileInfo,
-  type TFile,
   type WorkspaceLeaf,
 } from 'obsidian';
 import { EditorView, showPanel, type Panel } from '@codemirror/view';
@@ -45,6 +45,7 @@ import {
   shareOwnership,
   type ShareOwnership,
 } from './share/shareOwnership';
+import { noteColabFrontmatter } from './share/frontmatter';
 
 /** A decrypted incoming share awaiting the user's accept/deny decision. */
 interface IncomingShare {
@@ -69,8 +70,8 @@ export default class ColabPlugin extends Plugin {
   settings: ColabSettings = DEFAULT_SETTINGS;
   api!: ApiClient;
   private statusBarItem: HTMLElement | null = null;
-  private statusBarInterval: ReturnType<typeof setInterval> | null = null;
-  private pendingSharesInterval: ReturnType<typeof setInterval> | null = null;
+  private statusBarInterval: number | null = null;
+  private pendingSharesInterval: number | null = null;
   // Cache shared note info so we can prompt on delete (frontmatter gone after deletion)
   private sharedNoteCache = new Map<string, {
     shareId: string;
@@ -80,10 +81,10 @@ export default class ColabPlugin extends Plugin {
   }>();
   // Deferred "delete from server?" prompts, keyed by shareId. A move can surface
   // as a delete+create pair; deferring lets the re-created copy cancel the prompt.
-  private pendingDeletions = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingDeletions = new Map<string, number>();
   // Track which [[wikilinks]] we've already prompted about
   private promptedLinks = new Set<string>();
-  private refCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  private refCheckTimer: number | null = null;
   private refCheckFile: TFile | null = null;
   // Incoming-share accept/deny queue (one popup shown at a time)
   private incomingShareQueue: IncomingShare[] = [];
@@ -91,7 +92,7 @@ export default class ColabPlugin extends Plugin {
   private warnedChangedIdentityKeys = new Set<string>();
   private showingIncomingModal = false;
   private duplicateSyncWarnings = new Set<string>();
-  private readOnlyRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  private readOnlyRefreshInterval: number | null = null;
   private refreshingReadOnlyMirrors = new Set<string>();
   private readOnlyPromptedAt = new Map<string, number>();
   private suppressedDeletionPrompts = new Set<string>();
@@ -130,7 +131,7 @@ export default class ColabPlugin extends Plugin {
 
     // Ribbon icon to open dashboard
     this.addRibbonIcon('share-2', 'Note Colab dashboard', () => {
-      this.activateDashboardView();
+      void this.activateDashboardView();
     });
 
     // Settings tab
@@ -152,7 +153,7 @@ export default class ColabPlugin extends Plugin {
         if (!file) return false;
         if (checking) return true;
 
-        this.shareCurrentNote();
+        void this.shareCurrentNote();
       },
     });
 
@@ -160,8 +161,8 @@ export default class ColabPlugin extends Plugin {
       id: 'import-shared-note',
       name: 'Import shared note',
       callback: () => {
-        new ImportModal(this.app, async (url) => {
-          await importNote(this.app, this.api, url, {
+        new ImportModal(this.app, (url) => {
+          void importNote(this.app, this.api, url, {
             settings: this.settings,
             saveSettings: () => this.saveSettings(),
           });
@@ -214,7 +215,7 @@ export default class ColabPlugin extends Plugin {
         if (!file) return false;
         if (checking) return true;
 
-        revokeShare(this.app, this.api, file);
+        void revokeShare(this.app, this.api, file);
       },
     });
 
@@ -226,7 +227,7 @@ export default class ColabPlugin extends Plugin {
         if (!file) return false;
         if (checking) return true;
 
-        copyShareLink(this.app, file);
+        void copyShareLink(this.app, file);
       },
     });
 
@@ -236,10 +237,10 @@ export default class ColabPlugin extends Plugin {
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
         if (!file) return false;
-        if (!this.app.metadataCache.getFileCache(file)?.frontmatter?.colab_share_id) return false;
+        if (!noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter)?.colab_share_id) return false;
         if (checking) return true;
 
-        this.openManageLinks(file);
+        void this.openManageLinks(file);
       },
     });
 
@@ -247,7 +248,7 @@ export default class ColabPlugin extends Plugin {
       id: 'open-dashboard',
       name: 'Open dashboard',
       callback: () => {
-        this.activateDashboardView();
+        void this.activateDashboardView();
       },
     });
 
@@ -256,8 +257,8 @@ export default class ColabPlugin extends Plugin {
     // --- Detect local deletion of shared notes ---
     this.registerEvent(
       this.app.vault.on('delete', (file) => {
-        if (file.path.endsWith('.md')) {
-          this.handleFileDelete(file as TFile);
+        if (file instanceof TFile) {
+          void this.handleFileDelete(file);
         }
       })
     );
@@ -270,8 +271,8 @@ export default class ColabPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on('rename', (file, oldPath) => {
         const allowedReadOnlyRename = this.allowedReadOnlyRenames.delete(file.path);
-        if (!allowedReadOnlyRename && file.path.endsWith('.md')) {
-          const markdownFile = file as TFile;
+        if (!allowedReadOnlyRename && file instanceof TFile) {
+          const markdownFile = file;
           const oldName = oldPath.split('/').pop() || '';
           if (this.isReadOnlyMirror(markdownFile) && markdownFile.name !== oldName) {
             void this.restoreReadOnlyMirrorName(markdownFile, oldPath);
@@ -284,12 +285,12 @@ export default class ColabPlugin extends Plugin {
           this.sharedNoteCache.delete(oldPath);
           this.sharedNoteCache.set(file.path, {
             ...cached,
-            title: (file as TFile).basename ?? cached.title,
+            title: file instanceof TFile ? file.basename : cached.title,
           });
           this.cancelPendingDeletion(cached.shareId);
         }
-        if (file.path.endsWith('.md')) {
-          void this.publishRenamedTitle(file as TFile);
+        if (file instanceof TFile) {
+          void this.publishRenamedTitle(file);
         }
       })
     );
@@ -299,8 +300,8 @@ export default class ColabPlugin extends Plugin {
     // thing the web ever sees. Re-encrypt and PATCH it whenever the file changes.
     this.registerEvent(
       this.app.vault.on('modify', (file) => {
-        if (file.path.endsWith('.md')) {
-          this.maybePublishReadOnly(file as TFile);
+        if (file instanceof TFile) {
+          void this.maybePublishReadOnly(file);
         }
       })
     );
@@ -338,8 +339,8 @@ export default class ColabPlugin extends Plugin {
     // Update status bar and auto-connect share sync when active leaf changes
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', () => {
-        this.updateStatusBar();
-        this.autoConnectShareSync();
+        void this.updateStatusBar();
+        void this.autoConnectShareSync();
         const file = this.app.workspace.getActiveFile();
         if (file) {
           this.maybePublishReadOnly(file);
@@ -351,7 +352,7 @@ export default class ColabPlugin extends Plugin {
 
     // Auto-connect share sync for any already-open shared note
     this.app.workspace.onLayoutReady(() => {
-      this.autoConnectShareSync();
+      void this.autoConnectShareSync();
       const file = this.app.workspace.getActiveFile();
       if (file) {
         this.maybePublishReadOnly(file);
@@ -361,22 +362,22 @@ export default class ColabPlugin extends Plugin {
     });
 
     // Periodically refresh status bar to reflect WS state changes
-    this.statusBarInterval = setInterval(() => this.updateStatusBar(), 3000);
-    this.readOnlyRefreshInterval = setInterval(() => {
+    this.statusBarInterval = window.setInterval(() => this.updateStatusBar(), 3000);
+    this.readOnlyRefreshInterval = window.setInterval(() => {
       const file = this.app.workspace.getActiveFile();
       if (file) void this.refreshReadOnlyMirror(file);
     }, 30_000);
 
     // Poll for pending shares and storage usage (storage check self-throttles)
-    this.pendingSharesInterval = setInterval(() => {
-      this.checkPendingShares();
-      this.maybeWarnStorage();
+    this.pendingSharesInterval = window.setInterval(() => {
+      void this.checkPendingShares();
+      void this.maybeWarnStorage();
     }, 60_000);
     // Check once on startup (with a short delay to let the vault load)
     this.app.workspace.onLayoutReady(() => {
-      setTimeout(() => {
-        this.checkPendingShares();
-        this.maybeWarnStorage();
+      window.setTimeout(() => {
+        void this.checkPendingShares();
+        void this.maybeWarnStorage();
       }, 5000);
     });
 
@@ -389,7 +390,7 @@ export default class ColabPlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on('changed', (file) => {
         const cache = this.app.metadataCache.getFileCache(file);
-        const fm = cache?.frontmatter;
+        const fm = noteColabFrontmatter(cache?.frontmatter);
         if (fm?.colab_share_id) {
           this.sharedNoteCache.set(file.path, {
             shareId: fm.colab_share_id,
@@ -401,10 +402,10 @@ export default class ColabPlugin extends Plugin {
           // left over from the delete half of a move. (issue #3)
           this.cancelPendingDeletion(fm.colab_share_id);
           // Debounce referenced-note checks to avoid API flooding
-          if (this.refCheckTimer) clearTimeout(this.refCheckTimer);
+          if (this.refCheckTimer) window.clearTimeout(this.refCheckTimer);
           this.refCheckFile = file;
-          this.refCheckTimer = setTimeout(() => {
-            if (this.refCheckFile) this.checkReferencedNotes(this.refCheckFile);
+          this.refCheckTimer = window.setTimeout(() => {
+            if (this.refCheckFile) void this.checkReferencedNotes(this.refCheckFile);
             this.refCheckFile = null;
           }, 2000);
         } else {
@@ -504,7 +505,7 @@ export default class ColabPlugin extends Plugin {
   }
 
   private createReadOnlyBanner(file: TFile): HTMLElement {
-    const banner = document.createElement('div');
+    const banner = createDiv();
     banner.className = 'notecolab-read-only-banner';
     banner.setCssStyles({
       display: 'flex',
@@ -544,7 +545,7 @@ export default class ColabPlugin extends Plugin {
   }
 
   private isReadOnlyMirror(file: TFile): boolean {
-    return isReadOnlyRecipient(this.app.metadataCache.getFileCache(file)?.frontmatter);
+    return isReadOnlyRecipient(noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter));
   }
 
   private promptReadOnlyEdit(file: TFile): void {
@@ -603,7 +604,7 @@ export default class ColabPlugin extends Plugin {
 
   private async deleteReadOnlyMirror(file: TFile): Promise<void> {
     if (!this.isReadOnlyMirror(file)) return;
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
 
     stopShareSync(this.app, file.path);
     cancelSnapshot(file.path);
@@ -619,7 +620,7 @@ export default class ColabPlugin extends Plugin {
   private async refreshReadOnlyMirror(file: TFile): Promise<void> {
     if (!this.isReadOnlyMirror(file) || this.refreshingReadOnlyMirrors.has(file.path)) return;
     const startingPath = file.path;
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
     const roomId = fm?.colab_share_id;
     const linkShareId = fm?.colab_link_id || shareIdFromLink(fm?.colab_link) || roomId;
     const encryptionKey = fm?.colab_encryption_key
@@ -633,8 +634,10 @@ export default class ColabPlugin extends Plugin {
       if (!note) return;
 
       if (note.accessMode !== 'read_only') {
-        await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-          frontmatter.colab_access = note.accessMode;
+        await this.app.fileManager.processFrontMatter(file, (frontmatter: import('./share/frontmatter').NoteColabFrontmatter) => {
+          if (note.accessMode === 'public_edit' || note.accessMode === 'invited_edit' || note.accessMode === 'read_only') {
+            frontmatter.colab_access = note.accessMode;
+          }
           if (note.expiresAt) frontmatter.colab_expires = note.expiresAt;
           else delete frontmatter.colab_expires;
         });
@@ -646,7 +649,7 @@ export default class ColabPlugin extends Plugin {
       const remoteBody = await decrypt(note.encryptedContent, encryptionKey);
       const current = await this.app.vault.read(file);
       const { frontmatter, body } = parseFrontmatter(current);
-      const liveFm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const liveFm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
       if (!isReadOnlyRecipient(liveFm) || liveFm?.colab_share_id !== roomId) return;
       if (body !== remoteBody) {
         await this.app.vault.modify(file, frontmatter + remoteBody);
@@ -718,9 +721,9 @@ export default class ColabPlugin extends Plugin {
       return;
     }
 
-    if (this.app.metadataCache.getFileCache(file)?.frontmatter?.colab_share_id) {
+    if (noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter)?.colab_share_id) {
       new Notice('This note is already shared. Opening its sharing controls so you can resend it without creating a duplicate.');
-      this.openManageLinks(file);
+      void this.openManageLinks(file);
       return;
     }
 
@@ -733,7 +736,7 @@ export default class ColabPlugin extends Plugin {
       showControls: false,
       showChrome: false,
       collaborators: [],
-    }, this.settings.contacts, async (opts) => {
+    }, this.settings.contacts, (opts) => { void (async () => {
       const result = await shareNote(this.app, this.api, this.settings, file, {
         accessMode: opts.accessMode,
         expiresIn: opts.accessMode === 'invited_edit' ? undefined : (opts.expiresIn || undefined),
@@ -781,11 +784,11 @@ export default class ColabPlugin extends Plugin {
           new Notice('Invite link copied to clipboard!\nShare it with anyone you want to invite.');
         }
       }
-    }).open();
+    })(); }).open();
   }
 
   private openManageLinks(file: TFile): void {
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
     if (!fm?.colab_share_id) return;
 
     const encKey = fm.colab_encryption_key ||
@@ -816,7 +819,7 @@ export default class ColabPlugin extends Plugin {
   }
 
   private async publishRenamedTitle(file: TFile): Promise<void> {
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
     if (!fm?.colab_share_id || !mayPublishAsOwner(fm)) return;
 
     const encKey = fm.colab_encryption_key ||
@@ -837,11 +840,11 @@ export default class ColabPlugin extends Plugin {
   }
 
   onunload() {
-    if (this.statusBarInterval) clearInterval(this.statusBarInterval);
-    if (this.pendingSharesInterval) clearInterval(this.pendingSharesInterval);
-    if (this.readOnlyRefreshInterval) clearInterval(this.readOnlyRefreshInterval);
-    if (this.refCheckTimer) clearTimeout(this.refCheckTimer);
-    for (const timer of this.pendingDeletions.values()) clearTimeout(timer);
+    if (this.statusBarInterval) window.clearInterval(this.statusBarInterval);
+    if (this.pendingSharesInterval) window.clearInterval(this.pendingSharesInterval);
+    if (this.readOnlyRefreshInterval) window.clearInterval(this.readOnlyRefreshInterval);
+    if (this.refCheckTimer) window.clearTimeout(this.refCheckTimer);
+    for (const timer of this.pendingDeletions.values()) window.clearTimeout(timer);
     this.pendingDeletions.clear();
     destroyAllShareSyncs(this.app);
   }
@@ -904,7 +907,7 @@ export default class ColabPlugin extends Plugin {
       }
     }
     if (leaf) {
-      workspace.revealLeaf(leaf);
+      await workspace.revealLeaf(leaf);
     }
   }
 
@@ -913,7 +916,7 @@ export default class ColabPlugin extends Plugin {
     for (const leaf of leaves) {
       const view = leaf.view;
       if (view instanceof DashboardView) {
-        view.loadData();
+        void view.loadData();
       }
     }
   }
@@ -935,7 +938,7 @@ export default class ColabPlugin extends Plugin {
     if (!file) return;
     // Check frontmatter for share info
     const cache = this.app.metadataCache.getFileCache(file);
-    const fm = cache?.frontmatter;
+    const fm = noteColabFrontmatter(cache?.frontmatter);
     const activeShareId = getShareSyncShareId(file.path);
     if (activeShareId) {
       const encryptionKey = fm?.colab_encryption_key
@@ -986,7 +989,7 @@ export default class ColabPlugin extends Plugin {
   private maybePublishReadOnly(file: TFile) {
     // Edit shares persist through their active sync; don't double-publish.
     if (getShareSync(file.path)) return;
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
     if (!fm?.colab_share_id || fm.colab_access !== 'read_only' || !mayPublishAsOwner(fm)) return;
     // Skip if the link is locally known to be expired.
     if (fm.colab_expires && new Date(fm.colab_expires) < new Date()) return;
@@ -1040,7 +1043,7 @@ export default class ColabPlugin extends Plugin {
     this.sharedNoteCache.clear();
     for (const file of this.app.vault.getMarkdownFiles()) {
       const cache = this.app.metadataCache.getFileCache(file);
-      const fm = cache?.frontmatter;
+      const fm = noteColabFrontmatter(cache?.frontmatter);
       if (fm?.colab_share_id) {
         this.sharedNoteCache.set(file.path, {
           shareId: fm.colab_share_id,
@@ -1063,7 +1066,7 @@ export default class ColabPlugin extends Plugin {
         // Check if we already have this note imported
         const existingFile = this.app.vault.getMarkdownFiles().find((f) => {
           const cache = this.app.metadataCache.getFileCache(f);
-          return cache?.frontmatter?.colab_share_id === ps.shareId;
+          return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === ps.shareId;
         });
 
         if (existingFile) {
@@ -1252,7 +1255,7 @@ export default class ColabPlugin extends Plugin {
   /** Scan a synced note for [[wikilinks]] to unshared notes and prompt to share them */
   private async checkReferencedNotes(file: TFile) {
     const cache = this.app.metadataCache.getFileCache(file);
-    const fm = cache?.frontmatter;
+    const fm = noteColabFrontmatter(cache?.frontmatter);
     if (!fm?.colab_share_id || fm.colab_access === 'read_only') return;
 
     // Get collaborators for this note
@@ -1263,12 +1266,12 @@ export default class ColabPlugin extends Plugin {
     const links = cache?.links || [];
     for (const link of links) {
       const linkedFile = this.app.metadataCache.getFirstLinkpathDest(link.link, file.path);
-      if (!linkedFile || !(linkedFile as TFile).extension) continue;
-      if ((linkedFile as TFile).extension !== 'md') continue;
+      if (!linkedFile || !(linkedFile).extension) continue;
+      if ((linkedFile).extension !== 'md') continue;
 
       // Check if linked note is already shared
-      const linkedCache = this.app.metadataCache.getFileCache(linkedFile as TFile);
-      if (linkedCache?.frontmatter?.colab_share_id) continue;
+      const linkedCache = this.app.metadataCache.getFileCache(linkedFile);
+      if (noteColabFrontmatter(linkedCache?.frontmatter)?.colab_share_id) continue;
 
       // Don't prompt for the same link twice in this session
       const promptKey = `${file.path}::${linkedFile.path}`;
@@ -1334,12 +1337,12 @@ export default class ColabPlugin extends Plugin {
     // re-created copy of the same share can cancel it; only a note that stays
     // gone is a real deletion. (issue #3)
     const prev = this.pendingDeletions.get(cached.shareId);
-    if (prev) clearTimeout(prev);
-    const timer = setTimeout(() => {
+    if (prev) window.clearTimeout(prev);
+    const timer = window.setTimeout(() => {
       this.pendingDeletions.delete(cached.shareId);
       // The share reappeared elsewhere in the vault → it was moved, not deleted.
       if (this.isShareIdInVault(cached.shareId)) return;
-      this.promptDeleteFromServer(cached.shareId, cached.title);
+      void this.promptDeleteFromServer(cached.shareId, cached.title);
     }, 1500);
     this.pendingDeletions.set(cached.shareId, timer);
   }
@@ -1348,7 +1351,7 @@ export default class ColabPlugin extends Plugin {
   private cancelPendingDeletion(shareId: string) {
     const timer = this.pendingDeletions.get(shareId);
     if (timer) {
-      clearTimeout(timer);
+      window.clearTimeout(timer);
       this.pendingDeletions.delete(shareId);
     }
   }
@@ -1361,22 +1364,24 @@ export default class ColabPlugin extends Plugin {
     // The cache may not have caught up with a just-created copy yet — scan
     // frontmatter directly as the authoritative check.
     for (const f of this.app.vault.getMarkdownFiles()) {
-      const sid = this.app.metadataCache.getFileCache(f)?.frontmatter?.colab_share_id;
+      const sid = noteColabFrontmatter(this.app.metadataCache.getFileCache(f)?.frontmatter)?.colab_share_id;
       if (sid === shareId) return true;
     }
     return false;
   }
 
   private promptDeleteFromServer(shareId: string, title: string) {
-    new DeleteConfirmModal(this.app, title, async (deleteFromServer) => {
-      if (deleteFromServer) {
-        const ok = await this.api.deleteNote(shareId);
-        if (ok) {
-          new Notice(`"${title}" deleted from server`);
-        } else {
-          new Notice('Failed to delete from server. You can try again from the Note Colab dashboard.');
+    new DeleteConfirmModal(this.app, title, (deleteFromServer) => {
+      void (async () => {
+        if (deleteFromServer) {
+          const ok = await this.api.deleteNote(shareId);
+          if (ok) {
+            new Notice(`"${title}" deleted from server`);
+          } else {
+            new Notice('Failed to delete from server. You can try again from the Note Colab dashboard.');
+          }
         }
-      }
+      })();
     }).open();
   }
 }

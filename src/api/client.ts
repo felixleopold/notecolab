@@ -1,7 +1,24 @@
-import { requestUrl } from 'obsidian';
+import { requestUrl, type RequestUrlResponse } from 'obsidian';
 import type { ColabSettings, NoteContent, SessionInfo } from '../types';
 import { requestHeaders } from './credentials';
 import { directoryIdentityId, pinDirectoryPublicKey } from '../crypto/identityTrust';
+
+function responseJson<T>(response: RequestUrlResponse): T {
+  // Obsidian exposes parsed JSON as `any`; keep that untyped boundary in one place.
+  return response.json as T;
+}
+
+function requestErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('status' in error)) return undefined;
+  return typeof error.status === 'number' ? error.status : undefined;
+}
+
+function requestErrorMessage(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('json' in error)) return undefined;
+  const json: unknown = error.json;
+  if (typeof json !== 'object' || json === null || !('error' in json)) return undefined;
+  return typeof json.error === 'string' ? json.error : undefined;
+}
 
 export class ApiClient {
   /**
@@ -65,7 +82,7 @@ export class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ publicKey, ...(inviteCode ? { inviteCode } : {}) }),
     });
-    return res.json;
+    return responseJson(res);
   }
 
   async recoverPlugin(uid: string, password: string, publicKey: string): Promise<
@@ -79,10 +96,9 @@ export class ApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uid, password, publicKey }),
       });
-      return res.json;
+      return responseJson(res);
     } catch (error) {
-      const response = error as { json?: { error?: string } };
-      return { error: response.json?.error || 'Account recovery failed' };
+      return { error: requestErrorMessage(error) || 'Account recovery failed' };
     }
   }
 
@@ -100,7 +116,7 @@ export class ApiClient {
       headers: this.headers,
       body: JSON.stringify(data),
     });
-    return res.json;
+    return responseJson(res);
   }
 
   async getNoteContent(shareId: string): Promise<NoteContent | null> {
@@ -110,7 +126,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -123,11 +139,13 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return { accessMode: res.json.access_mode, expiresAt: res.json.expires_at };
-    } catch (e: any) {
-      if (e?.status === 410) return 'expired';
-      if (e?.status === 404) return 'not_found';
-      if (e?.status === 403) return 'forbidden';
+      const json = responseJson<{ access_mode: string; expires_at: string | null }>(res);
+      return { accessMode: json.access_mode, expiresAt: json.expires_at };
+    } catch (error: unknown) {
+      const status = requestErrorStatus(error);
+      if (status === 410) return 'expired';
+      if (status === 404) return 'not_found';
+      if (status === 403) return 'forbidden';
       return null; // network error or other transient failure
     }
   }
@@ -173,7 +191,7 @@ export class ApiClient {
       headers: this.headers,
       body: JSON.stringify({ type, shareId }),
     });
-    return res.json;
+    return responseJson(res);
   }
 
   async endSession(roomId: string): Promise<boolean> {
@@ -196,7 +214,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -211,9 +229,9 @@ export class ApiClient {
         body: JSON.stringify({ roomToken, ...(writeToken ? { writeToken } : {}) }),
       });
       return true;
-    } catch (e: any) {
-      if (e?.status !== 403) {
-        console.warn('NoteColab: setRoomToken failed:', e);
+    } catch (error: unknown) {
+      if (requestErrorStatus(error) !== 403) {
+        console.warn('NoteColab: setRoomToken failed:', error);
       }
       return false;
     }
@@ -240,7 +258,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -253,7 +271,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json.images || [];
+      return responseJson<{ images?: { filename: string; mimeType: string }[] }>(res).images || [];
     } catch {
       return [];
     }
@@ -273,7 +291,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -291,7 +309,7 @@ export class ApiClient {
         headers: this.headers,
         body: JSON.stringify(data),
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -344,7 +362,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch (e) {
       console.error('NoteColab: listMyNotes failed:', e);
       return null;
@@ -370,7 +388,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch (e) {
       console.error('NoteColab: getSharedWithMe failed:', e);
       return null;
@@ -420,7 +438,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch (e) {
       console.error('NoteColab: getMyStorage failed:', e);
       return null;
@@ -446,7 +464,7 @@ export class ApiClient {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -470,7 +488,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -485,10 +503,11 @@ export class ApiClient {
         headers: this.headers,
         body: JSON.stringify({ planId }),
       });
-      return res.json;
-    } catch (e: any) {
+      return responseJson(res);
+    } catch (error: unknown) {
       // requestUrl throws on non-2xx; surface the server's error message if any.
-      const msg = e?.json?.error || (e?.status === 503 ? 'Billing is not available on this server' : 'Checkout failed');
+      const msg = requestErrorMessage(error)
+        || (requestErrorStatus(error) === 503 ? 'Billing is not available on this server' : 'Checkout failed');
       return { error: msg };
     }
   }
@@ -502,7 +521,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json.collaborators || [];
+      return responseJson<{ collaborators?: { uid: string; canEdit: boolean }[] }>(res).collaborators || [];
     } catch {
       return [];
     }
@@ -559,7 +578,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      info = res.json;
+      info = responseJson(res);
     } catch {
       return null;
     }
@@ -593,7 +612,7 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -607,7 +626,7 @@ export class ApiClient {
         headers: this.headers,
         body: JSON.stringify({ username }),
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -651,7 +670,18 @@ export class ApiClient {
         method: 'GET',
         headers: this.headers,
       });
-      return res.json.pendingShares || [];
+      return responseJson<{ pendingShares?: {
+        id: number;
+        shareId: string;
+        senderUid: string;
+        senderName: string | null;
+        encryptedKey: string;
+        nonce: string;
+        title: string | null;
+        encryptedTitle: string | null;
+        accessMode: 'public_edit' | 'invited_edit' | 'read_only';
+        createdAt: string;
+      }[] }>(res).pendingShares || [];
     } catch (e) {
       console.error('NoteColab: getPendingShares failed:', e);
       return [];
@@ -692,7 +722,7 @@ export class ApiClient {
         headers: this.headers,
         body: '{}',
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -710,7 +740,7 @@ export class ApiClient {
         headers: this.headers,
         body: JSON.stringify(options || {}),
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -724,7 +754,7 @@ export class ApiClient {
         headers: this.headers,
         body: '{}',
       });
-      return res.json;
+      return responseJson(res);
     } catch {
       return null;
     }
@@ -740,7 +770,7 @@ export class ApiClient {
         headers: this.headers,
         body: JSON.stringify({ password, displayName }),
       });
-      return { ok: true, vaultSalt: res.json.vaultSalt };
+      return { ok: true, vaultSalt: responseJson<{ vaultSalt?: string }>(res).vaultSalt };
     } catch {
       return { ok: false };
     }

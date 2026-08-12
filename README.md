@@ -196,6 +196,11 @@ Important boundaries:
   the client with AES-256-GCM.
 - The plugin reads and writes Markdown files, frontmatter, and supported image
   embeds in your vault as needed to share, import, mirror, and synchronize them.
+- To find shared notes and their local encryption keys, the dashboard and key
+  sync scan Markdown-file metadata across the vault. Note Colab does not upload
+  unrelated note contents.
+- Copy actions write the selected User ID, fingerprint, or share link to the
+  system clipboard. The plugin does not read clipboard contents.
 - Live Yjs updates are readable by the relay while a room is active.
 - Link holders can decrypt the shared note, and editable-link holders can change
   it. Recipients can always copy plaintext they are allowed to read.

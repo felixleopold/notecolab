@@ -1,6 +1,6 @@
 import { Modal, Notice, PluginSettingTab, Setting, type App, requestUrl } from 'obsidian';
 import type ColabPlugin from '../main';
-import { DEFAULT_SETTINGS, type Contact } from '../types';
+import { DEFAULT_SETTINGS } from '../types';
 import { destroyAllShareSyncs } from '../session/sessions';
 import { ApiClient } from '../api/client';
 import { deriveVaultKey, encryptWithVaultKey } from '../crypto/crypto';
@@ -9,6 +9,7 @@ import {
   parseDirectoryIdentityId,
   publicKeyFingerprint,
 } from '../crypto/identityTrust';
+import { noteColabFrontmatter } from '../share/frontmatter';
 
 /**
  * Only open http(s) checkout URLs. The URL is returned by the (user-configured,
@@ -189,7 +190,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     if (this.plugin.settings.uid) {
       uidSetting.addButton((btn) => {
         btn.setButtonText('Copy').onClick(() => {
-          navigator.clipboard.writeText(this.plugin.settings.uid);
+          void navigator.clipboard.writeText(this.plugin.settings.uid);
           new Notice('User ID copied to clipboard');
         });
       });
@@ -207,7 +208,7 @@ export class ColabSettingsTab extends PluginSettingTab {
         .setDesc('Compare this with collaborators through another channel before they reset a changed key pin.')
         .addText((text) => text.setValue(fingerprint).setDisabled(true))
         .addButton((btn) => btn.setButtonText('Copy').onClick(() => {
-          navigator.clipboard.writeText(fingerprint);
+          void navigator.clipboard.writeText(fingerprint);
           new Notice('Identity fingerprint copied');
         }));
     }
@@ -248,7 +249,9 @@ export class ColabSettingsTab extends PluginSettingTab {
           .addOption('invited_edit', 'Invited collaborators')
           .setValue(this.plugin.settings.defaultAccessMode)
           .onChange(async (value) => {
-            this.plugin.settings.defaultAccessMode = value as any;
+            if (value === 'read_only' || value === 'public_edit' || value === 'invited_edit') {
+              this.plugin.settings.defaultAccessMode = value;
+            }
             await this.plugin.saveSettings();
           });
       });
@@ -660,7 +663,7 @@ export class ColabSettingsTab extends PluginSettingTab {
         .setDesc(c.uid.substring(0, 16) + '...')
         .addButton((btn) => {
           btn.setButtonText('Copy UID').onClick(() => {
-            navigator.clipboard.writeText(c.uid);
+            void navigator.clipboard.writeText(c.uid);
             new Notice('UID copied');
           });
         })
@@ -756,7 +759,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     const results: { noteShareId: string; encryptionKey: string }[] = [];
     for (const file of this.app.vault.getMarkdownFiles()) {
       const cache = this.app.metadataCache.getFileCache(file);
-      const fm = cache?.frontmatter;
+      const fm = noteColabFrontmatter(cache?.frontmatter);
       if (!fm?.colab_share_id) continue;
       const key = fm.colab_encryption_key ||
         (fm.colab_link ? fm.colab_link.split('#')[1] : '');

@@ -27,7 +27,7 @@ export function existingImportNotice(
     && knownAccess !== delivered.accessMode;
 
   if (isDifferentLink && isDifferentAccess) {
-    return `"${basename}" is already in your vault as ${accessLabel(knownAccess as string)}`
+    return `"${basename}" is already in your vault as ${accessLabel(knownAccess)}`
       + ` and was opened unchanged. Delete it first to import the`
       + ` ${accessLabel(delivered.accessMode)} version.`;
   }

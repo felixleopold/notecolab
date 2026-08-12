@@ -1,11 +1,9 @@
 import esbuild from 'esbuild';
-import builtins from 'builtin-modules';
+import { builtinModules } from 'node:module';
 import sveltePlugin from 'esbuild-svelte';
 import sveltePreprocess from 'svelte-preprocess';
-import { readFileSync } from 'fs';
 
 const prod = process.argv[2] === 'production';
-const manifest = JSON.parse(readFileSync('./manifest.json', 'utf-8'));
 
 const context = await esbuild.context({
   entryPoints: ['src/main.ts'],
@@ -24,7 +22,7 @@ const context = await esbuild.context({
     '@lezer/common',
     '@lezer/highlight',
     '@lezer/lr',
-    ...builtins,
+    ...builtinModules,
   ],
   plugins: [
     sveltePlugin({

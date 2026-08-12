@@ -1,4 +1,4 @@
-import { Notice, normalizePath, type App, type TFile } from 'obsidian';
+import { Notice, normalizePath, TFile, type App } from 'obsidian';
 import type { ApiClient } from '../api/client';
 import { isOfficialServerAlias, type ColabSettings } from '../types';
 import { decrypt } from '../crypto/crypto';
@@ -7,6 +7,7 @@ import { findImageEmbeds } from './imageEmbeds';
 import { ForeignHostModal } from '../ui/ForeignHostModal';
 import { sanitizeFilename, sharedNoteBasename, withFilenameCounter } from './sharedNoteFilename';
 import { existingImportNotice } from './duplicateImport';
+import { noteColabFrontmatter } from './frontmatter';
 
 /**
  * Origin embedded in a share link when it differs from the configured server,
@@ -108,13 +109,13 @@ export async function importNote(
     const canonicalId = note.roomId || shareId;
     const existingFile = app.vault.getMarkdownFiles().find((f) => {
       const cache = app.metadataCache.getFileCache(f);
-      const fmId = cache?.frontmatter?.colab_share_id;
+      const fmId = noteColabFrontmatter(cache?.frontmatter)?.colab_share_id;
       return fmId === canonicalId || fmId === shareId;
     });
 
     if (existingFile) {
       // Open the existing file instead of creating a duplicate
-      const existingFm = app.metadataCache.getFileCache(existingFile)?.frontmatter;
+      const existingFm = noteColabFrontmatter(app.metadataCache.getFileCache(existingFile)?.frontmatter);
       await app.workspace.getLeaf(false).openFile(existingFile);
       new Notice(existingImportNotice(existingFile.basename, existingFm, {
         linkShareId: shareId,
@@ -198,8 +199,8 @@ export async function importNote(
 
     // Open the new file
     const newFile = app.vault.getAbstractFileByPath(finalPath);
-    if (newFile) {
-      await app.workspace.getLeaf(false).openFile(newFile as TFile);
+    if (newFile instanceof TFile) {
+      await app.workspace.getLeaf(false).openFile(newFile);
     }
 
     const importedBasename = finalPath.slice(folderPath.length + 1, -3);

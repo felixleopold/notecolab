@@ -57,7 +57,7 @@ export class IncomingShareModal extends Modal {
       fontSize: '12px',
       lineHeight: '1.5',
     });
-    idBox.createEl('div', { text: 'Shared by user ID:' });
+    idBox.createDiv({ text: 'Shared by user ID:' });
     const uidEl = idBox.createEl('code', { text: this.info.senderUid });
     uidEl.setCssStyles({ wordBreak: 'break-all' });
 

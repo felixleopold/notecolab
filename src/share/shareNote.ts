@@ -1,4 +1,4 @@
-import { Notice, type App, type TFile } from 'obsidian';
+import { Notice, TFile, type App } from 'obsidian';
 import type { ApiClient } from '../api/client';
 import type { ColabSettings, ShareResult } from '../types';
 import { deriveRoomToken, deriveWriteCapability, encrypt, generateKey, encryptBinary } from '../crypto/crypto';
@@ -6,6 +6,7 @@ import { encryptKeyForRecipient } from '../crypto/keyExchange';
 import { DirectoryKeyChangedError } from '../crypto/identityTrust';
 import { parseFrontmatter, stopShareSync } from '../session/sessions';
 import { findImageEmbeds } from './imageEmbeds';
+import type { NoteColabFrontmatter } from './frontmatter';
 
 /** Get the MIME type for common image extensions */
 function getMimeType(filename: string): string {
@@ -29,10 +30,11 @@ function findCodeSuiteOutputImages(text: string): string[] {
   let match;
   while ((match = fenceRe.exec(text)) !== null) {
     try {
-      const data = JSON.parse(match[1].trim());
-      if (data && Array.isArray(data.figures)) {
-        for (const fig of data.figures) {
-          if (fig && fig.kind === 'image' && typeof fig.file === 'string') files.push(fig.file);
+      const data: unknown = JSON.parse(match[1].trim());
+      if (typeof data === 'object' && data !== null && 'figures' in data && Array.isArray(data.figures)) {
+        for (const fig of data.figures as unknown[]) {
+          if (typeof fig === 'object' && fig !== null && 'kind' in fig && fig.kind === 'image'
+            && 'file' in fig && typeof fig.file === 'string') files.push(fig.file);
         }
       }
     } catch {
@@ -46,7 +48,7 @@ function findCodeSuiteOutputImages(text: string): string[] {
 function resolveImageFile(app: App, filename: string, contextFile: TFile): TFile | null {
   // Try exact path first
   const exact = app.vault.getAbstractFileByPath(filename);
-  if (exact && 'extension' in exact) return exact as TFile;
+  if (exact instanceof TFile) return exact;
 
   // Use Obsidian's link resolution (handles attachments folder, relative paths)
   const resolved = app.metadataCache.getFirstLinkpathDest(filename, contextFile.path);
@@ -157,7 +159,7 @@ export async function shareNote(
     const shareUrl = `${settings.serverUrl}/s/${result.shareId}${query ? `?${query}` : ''}#${encryptionKey}`;
 
     // Store share info in frontmatter
-    await app.fileManager.processFrontMatter(file, (fm) => {
+    await app.fileManager.processFrontMatter(file, (fm: NoteColabFrontmatter) => {
       fm.colab_share_id = result.shareId;
       fm.colab_link_id = result.shareId;
       fm.colab_link = shareUrl;
@@ -215,7 +217,7 @@ export async function revokeShare(
 ): Promise<boolean> {
   try {
     let shareId = '';
-    await app.fileManager.processFrontMatter(file, (fm) => {
+    await app.fileManager.processFrontMatter(file, (fm: NoteColabFrontmatter) => {
       shareId = fm.colab_share_id || '';
     });
 
@@ -234,7 +236,7 @@ export async function revokeShare(
     stopShareSync(app, file.path);
 
     // Remove frontmatter
-    await app.fileManager.processFrontMatter(file, (fm) => {
+    await app.fileManager.processFrontMatter(file, (fm: NoteColabFrontmatter) => {
       delete fm.colab_share_id;
       delete fm.colab_link_id;
       delete fm.colab_link;
@@ -258,7 +260,7 @@ export async function copyShareLink(
   file: TFile
 ): Promise<void> {
   let link = '';
-  await app.fileManager.processFrontMatter(file, (fm) => {
+  await app.fileManager.processFrontMatter(file, (fm: NoteColabFrontmatter) => {
     link = fm.colab_link || '';
   });
 

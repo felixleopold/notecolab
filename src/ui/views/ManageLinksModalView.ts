@@ -64,12 +64,12 @@ export class ManageLinksModalView extends Modal {
       },
     });
 
-    this.component.$on('copy-link', (e: CustomEvent) => {
-      navigator.clipboard.writeText(e.detail.url);
+    this.component.$on('copy-link', (e: CustomEvent<{ url: string }>) => {
+      void navigator.clipboard.writeText(e.detail.url);
       new Notice('Link copied to clipboard');
     });
 
-    this.component.$on('create-link', async (e: CustomEvent) => {
+    this.component.$on('create-link', (e: CustomEvent<{ accessMode: string; expiresIn: number; label: string }>) => { void (async () => {
       const result = await this.api.createLink(this.noteShareId, {
         accessMode: e.detail.accessMode,
         expiresIn: e.detail.expiresIn,
@@ -81,9 +81,9 @@ export class ManageLinksModalView extends Modal {
       } else {
         new Notice('Failed to create link');
       }
-    });
+    })(); });
 
-    this.component.$on('update-link', async (e: CustomEvent) => {
+    this.component.$on('update-link', (e: CustomEvent<{ linkShareId: string; accessMode: string; expiresIn: number | null; label: string }>) => { void (async () => {
       const ok = await this.api.updateLink(e.detail.linkShareId, {
         accessMode: e.detail.accessMode,
         expiresIn: e.detail.expiresIn,
@@ -95,9 +95,9 @@ export class ManageLinksModalView extends Modal {
       } else {
         new Notice('Failed to update link');
       }
-    });
+    })(); });
 
-    this.component.$on('delete-link', async (e: CustomEvent) => {
+    this.component.$on('delete-link', (e: CustomEvent<{ linkShareId: string }>) => { void (async () => {
       const ok = await this.api.deleteLink(e.detail.linkShareId);
       if (ok) {
         new Notice('Link deleted');
@@ -105,18 +105,14 @@ export class ManageLinksModalView extends Modal {
       } else {
         new Notice('Failed to delete link');
       }
-    });
+    })(); });
 
-    this.component.$on('send-to-obsidian', async (e: CustomEvent) => {
+    this.component.$on('send-to-obsidian', (e: CustomEvent<{ uid: string; linkShareId: string; accessMode: 'public_edit' | 'invited_edit' | 'read_only' }>) => { void (async () => {
       const {
         uid,
         linkShareId,
         accessMode,
-      } = e.detail as {
-        uid: string;
-        linkShareId: string;
-        accessMode: 'public_edit' | 'invited_edit' | 'read_only';
-      };
+      } = e.detail;
       const publicKey = await this.trustedPublicKey(uid);
       if (publicKey === undefined) return;
       if (!publicKey) {
@@ -155,9 +151,9 @@ export class ManageLinksModalView extends Modal {
           : 'Failed to deliver to Obsidian',
       );
       if (delivered && accessMode === 'invited_edit') await this.loadData();
-    });
+    })(); });
 
-    this.component.$on('add-collaborator', async (e: CustomEvent) => {
+    this.component.$on('add-collaborator', (e: CustomEvent<{ uid: string }>) => { void (async () => {
       const uid = e.detail.uid;
 
       // Encrypt the note key for the collaborator
@@ -194,9 +190,9 @@ export class ManageLinksModalView extends Modal {
       } else {
         new Notice('Failed to add collaborator');
       }
-    });
+    })(); });
 
-    this.component.$on('remove-collaborator', async (e: CustomEvent) => {
+    this.component.$on('remove-collaborator', (e: CustomEvent<{ uid: string }>) => { void (async () => {
       const ok = await this.api.removeCollaborator(this.noteShareId, e.detail.uid);
       if (ok) {
         new Notice('Collaborator removed');
@@ -204,9 +200,9 @@ export class ManageLinksModalView extends Modal {
       } else {
         new Notice('Failed to remove collaborator');
       }
-    });
+    })(); });
 
-    this.component.$on('resend-collaborator', async (e: CustomEvent) => {
+    this.component.$on('resend-collaborator', (e: CustomEvent<{ uid: string }>) => { void (async () => {
       const uid = e.detail.uid;
       const publicKey = await this.trustedPublicKey(uid);
       if (publicKey === undefined) return;
@@ -231,9 +227,9 @@ export class ManageLinksModalView extends Modal {
         console.warn(`Failed to resend invitation to ${uid}:`, err);
         new Notice('Failed to resend invitation');
       }
-    });
+    })(); });
 
-    this.component.$on('create-invite-link', async (e: CustomEvent) => {
+    this.component.$on('create-invite-link', (e: CustomEvent<{ linkShareId?: string }>) => { void (async () => {
       const linkShareId = e.detail?.linkShareId || this.noteShareId;
       const result = await this.api.createInviteLink(linkShareId);
       if (result?.token) {
@@ -243,7 +239,7 @@ export class ManageLinksModalView extends Modal {
       } else {
         new Notice('Failed to create invite link');
       }
-    });
+    })(); });
 
     await this.loadData();
   }

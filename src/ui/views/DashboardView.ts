@@ -1,10 +1,11 @@
-import { ItemView, WorkspaceLeaf, Notice, type TFile } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Notice } from 'obsidian';
 import Dashboard from '../components/Dashboard.svelte';
 import type ColabPlugin from '../../main';
 import { decrypt, encrypt } from '../../crypto/crypto';
 import { decryptKeyFromSender } from '../../crypto/keyExchange';
 import { DirectoryKeyChangedError } from '../../crypto/identityTrust';
 import { stopShareSync } from '../../session/sessions';
+import { noteColabFrontmatter } from '../../share/frontmatter';
 
 export const DASHBOARD_VIEW_TYPE = 'notecolab-dashboard';
 
@@ -21,7 +22,7 @@ export class DashboardView extends ItemView {
   private collectNoteKeys(): Map<string, string> {
     const keys = new Map<string, string>();
     for (const file of this.app.vault.getMarkdownFiles()) {
-      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
       const shareId = typeof fm?.colab_share_id === 'string' ? fm.colab_share_id : '';
       const key = typeof fm?.colab_encryption_key === 'string'
         ? fm.colab_encryption_key
@@ -69,7 +70,7 @@ export class DashboardView extends ItemView {
 
     try {
       this.component = new Dashboard({
-        target: container as Element,
+        target: container,
         props: {
           loading: true,
           notes: [],
@@ -79,22 +80,22 @@ export class DashboardView extends ItemView {
         },
       });
 
-      this.component.$on('refresh', () => this.loadData());
-      this.component.$on('share-current', () => this.plugin.shareCurrentNote());
-      this.component.$on('open-note', (e: CustomEvent) => this.safeHandle(() => this.handleOpenNote(e.detail)));
-      this.component.$on('copy-link', (e: CustomEvent) => this.safeHandle(() => this.handleCopyLink(e.detail)));
-      this.component.$on('manage-links', (e: CustomEvent) => this.safeHandle(() => this.handleManageLinks(e.detail)));
-      this.component.$on('revoke', (e: CustomEvent) => this.safeHandle(() => this.handleRevoke(e.detail)));
-      this.component.$on('import-share', (e: CustomEvent) => this.safeHandle(() => this.handleImportShare(e.detail)));
-      this.component.$on('dismiss-share', (e: CustomEvent) => this.safeHandle(() => this.handleDismissShare(e.detail)));
-      this.component.$on('delete-note', (e: CustomEvent) => this.safeHandle(() => this.handleDeleteNote(e.detail)));
-      this.component.$on('leave-share', (e: CustomEvent) => this.safeHandle(() => this.handleLeaveShare(e.detail)));
+      this.component.$on('refresh', () => { void this.loadData(); });
+      this.component.$on('share-current', () => { void this.plugin.shareCurrentNote(); });
+      this.component.$on('open-note', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleOpenNote(e.detail)); });
+      this.component.$on('copy-link', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleCopyLink(e.detail)); });
+      this.component.$on('manage-links', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleManageLinks(e.detail)); });
+      this.component.$on('revoke', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleRevoke(e.detail)); });
+      this.component.$on('import-share', (e: CustomEvent<{ shareId: string; encryptedKey: string; nonce: string; senderUid: string; id: number }>) => { void this.safeHandle(() => this.handleImportShare(e.detail)); });
+      this.component.$on('dismiss-share', (e: CustomEvent<{ id: number }>) => { void this.safeHandle(() => this.handleDismissShare(e.detail)); });
+      this.component.$on('delete-note', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleDeleteNote(e.detail)); });
+      this.component.$on('leave-share', (e: CustomEvent<{ shareId: string }>) => { void this.safeHandle(() => this.handleLeaveShare(e.detail)); });
 
       await this.loadData();
     } catch (e) {
       console.error('NoteColab: Dashboard failed to initialize:', e);
       container.empty();
-      container.createEl('div', {
+      container.createDiv({
         text: `Dashboard failed to load: ${e instanceof Error ? e.message : String(e)}`,
         cls: 'notecolab-error',
       });
@@ -212,11 +213,11 @@ export class DashboardView extends ItemView {
     // Find file in vault by colab_share_id frontmatter
     const file = this.app.vault.getMarkdownFiles().find((f) => {
       const cache = this.app.metadataCache.getFileCache(f);
-      return cache?.frontmatter?.colab_share_id === detail.noteShareId;
+      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
     });
 
     if (file) {
-      this.app.workspace.getLeaf(false).openFile(file);
+      void this.app.workspace.getLeaf(false).openFile(file);
     } else {
       new Notice('Note not found in vault. It may need to be imported first.');
     }
@@ -225,14 +226,14 @@ export class DashboardView extends ItemView {
   private handleCopyLink(detail: { noteShareId: string }) {
     const file = this.app.vault.getMarkdownFiles().find((f) => {
       const cache = this.app.metadataCache.getFileCache(f);
-      return cache?.frontmatter?.colab_share_id === detail.noteShareId;
+      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
     });
 
     if (file) {
       const cache = this.app.metadataCache.getFileCache(file);
-      const link = cache?.frontmatter?.colab_link;
+      const link = noteColabFrontmatter(cache?.frontmatter)?.colab_link;
       if (link) {
-        navigator.clipboard.writeText(link);
+        void navigator.clipboard.writeText(link);
         new Notice('Share link copied to clipboard');
       } else {
         new Notice('No share link found for this note');
@@ -245,7 +246,7 @@ export class DashboardView extends ItemView {
   private handleManageLinks(detail: { noteShareId: string }) {
     const file = this.app.vault.getMarkdownFiles().find((f) => {
       const cache = this.app.metadataCache.getFileCache(f);
-      return cache?.frontmatter?.colab_share_id === detail.noteShareId;
+      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
     });
 
     if (!file) {
@@ -254,7 +255,7 @@ export class DashboardView extends ItemView {
     }
 
     const cache = this.app.metadataCache.getFileCache(file);
-    const fm = cache?.frontmatter;
+    const fm = noteColabFrontmatter(cache?.frontmatter);
     const encKey = fm?.colab_encryption_key ||
       (fm?.colab_link ? fm.colab_link.split('#')[1] : '');
 
@@ -264,7 +265,7 @@ export class DashboardView extends ItemView {
     }
 
     // Import dynamically to avoid circular dependencies
-    import('./ManageLinksModalView').then(({ ManageLinksModalView }) => {
+    void import('./ManageLinksModalView').then(({ ManageLinksModalView }) => {
       new ManageLinksModalView(
         this.app,
         this.plugin.api,
@@ -280,7 +281,7 @@ export class DashboardView extends ItemView {
   private async handleRevoke(detail: { noteShareId: string }) {
     const file = this.app.vault.getMarkdownFiles().find((f) => {
       const cache = this.app.metadataCache.getFileCache(f);
-      return cache?.frontmatter?.colab_share_id === detail.noteShareId;
+      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
     });
 
     if (file) {
@@ -357,12 +358,12 @@ export class DashboardView extends ItemView {
     }
 
     const file = this.app.vault.getMarkdownFiles().find((candidate) => {
-      const fm = this.app.metadataCache.getFileCache(candidate)?.frontmatter;
+      const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(candidate)?.frontmatter);
       return fm?.colab_share_id === detail.shareId;
     });
     if (file) {
       stopShareSync(this.app, file.path);
-      await this.app.fileManager.processFrontMatter(file, (fm) => {
+      await this.app.fileManager.processFrontMatter(file, (fm: import('../../share/frontmatter').NoteColabFrontmatter) => {
         delete fm.colab_share_id;
         delete fm.colab_link_id;
         delete fm.colab_link;
@@ -384,10 +385,10 @@ export class DashboardView extends ItemView {
       // Clean frontmatter from vault file
       const file = this.app.vault.getMarkdownFiles().find((f) => {
         const cache = this.app.metadataCache.getFileCache(f);
-        return cache?.frontmatter?.colab_share_id === detail.noteShareId;
+        return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
       });
       if (file) {
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
+        await this.app.fileManager.processFrontMatter(file, (fm: import('../../share/frontmatter').NoteColabFrontmatter) => {
           delete fm.colab_share_id;
           delete fm.colab_link_id;
           delete fm.colab_link;

@@ -1,4 +1,4 @@
-import { Notice, type App, type TFile } from 'obsidian';
+import { Notice, TFile, type App, type EventRef } from 'obsidian';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import type { ColabSettings } from '../types';
@@ -8,6 +8,7 @@ import { websocketCredentials } from '../api/credentials';
 import { downloadMissingAssets } from '../share/assets';
 import { findImageEmbeds } from '../share/imageEmbeds';
 import { hasMatchingEditableShareIdentity, hasMatchingShareIdentity } from './shareIdentity';
+import type { NoteColabFrontmatter } from '../share/frontmatter';
 
 // Strip frontmatter from note content — only the body syncs via Yjs
 export function parseFrontmatter(content: string): { frontmatter: string; body: string } {
@@ -27,8 +28,8 @@ interface ShareSyncState {
   provider: WebsocketProvider;
   shareId: string;
   filePath: string;
-  modifyRef: any;
-  healthInterval?: ReturnType<typeof setInterval>;
+  modifyRef: EventRef;
+  healthInterval?: number;
   cleanupTimers: () => void;
 }
 
@@ -56,7 +57,7 @@ function getMimeType(filename: string): string {
 // path for read-only shares (which have no Yjs sync at all) and it guarantees edit
 // shares persist even when no web peer is connected to bridge Yjs → server.
 
-const snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const snapshotTimers = new Map<string, number>();
 const lastPublishedBody = new Map<string, string>();
 
 /** Re-encrypt the note body and PATCH the stored snapshot (debounced, body-only). */
@@ -71,8 +72,8 @@ export function publishSnapshot(
 ): void {
   if (!encryptionKey) return;
   const prev = snapshotTimers.get(file.path);
-  if (prev) clearTimeout(prev);
-  snapshotTimers.set(file.path, setTimeout(async () => {
+  if (prev) window.clearTimeout(prev);
+  snapshotTimers.set(file.path, window.setTimeout(() => { void (async () => {
     snapshotTimers.delete(file.path);
     try {
       const content = await app.vault.read(file);
@@ -117,13 +118,13 @@ export function publishSnapshot(
     } catch (e) {
       console.error('Colab publishSnapshot error:', e);
     }
-  }, delay));
+  })(); }, delay));
 }
 
 /** Cancel a pending snapshot publish and forget cached state for a file. */
 export function cancelSnapshot(filePath: string): void {
   const t = snapshotTimers.get(filePath);
-  if (t) clearTimeout(t);
+  if (t) window.clearTimeout(t);
   snapshotTimers.delete(filePath);
   lastPublishedBody.delete(filePath);
 }
@@ -151,7 +152,7 @@ async function uploadReferencedImages(
     const imgFile = app.metadataCache.getFirstLinkpathDest(imgName, file.path);
     if (!imgFile) continue;
     try {
-      const data = await app.vault.readBinary(imgFile as TFile);
+      const data = await app.vault.readBinary(imgFile);
       const enc = await encryptBinary(data, encryptionKey);
       const current = parseFrontmatter(await app.vault.read(file));
       if (!hasMatchingShareIdentity(
@@ -232,15 +233,15 @@ export async function startShareSync(
     let disposed = false;
 
     // Debounced file writer — batches rapid remote Yjs changes into a single file write
-    let writeTimer: ReturnType<typeof setTimeout> | null = null;
+    let writeTimer: number | null = null;
     function scheduleFileWrite() {
-      if (writeTimer) clearTimeout(writeTimer);
-      writeTimer = setTimeout(async () => {
+      if (writeTimer) window.clearTimeout(writeTimer);
+      writeTimer = window.setTimeout(() => { void (async () => {
         writeTimer = null;
         if (disposed) return;
         writingToFile = true;
         try {
-          const remoteBody = ytext.toString();
+          const remoteBody = ytext.toJSON();
           const fileContent = await app.vault.read(file);
           if (disposed) return;
           const { frontmatter, body } = parseFrontmatter(fileContent);
@@ -261,14 +262,14 @@ export async function startShareSync(
         } finally {
           writingToFile = false;
         }
-      }, 50);
+      })(); }, 50);
     }
 
     // Download images referenced in synced text that are missing from the vault
-    let imageSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    let imageSyncTimer: number | null = null;
     function syncMissingImages(body: string) {
-      if (imageSyncTimer) clearTimeout(imageSyncTimer);
-      imageSyncTimer = setTimeout(async () => {
+      if (imageSyncTimer) window.clearTimeout(imageSyncTimer);
+      imageSyncTimer = window.setTimeout(() => { void (async () => {
         imageSyncTimer = null;
         if (disposed) return;
         const imageNames = findImageEmbeds(body);
@@ -285,15 +286,15 @@ export async function startShareSync(
           file.path,
           () => !disposed,
         );
-      }, 500);
+      })(); }, 500);
     }
 
     // Upload images referenced in text that aren't yet on the server
     const uploadedImages = new Set<string>(); // track already-uploaded filenames this session
-    let imageUploadTimer: ReturnType<typeof setTimeout> | null = null;
+    let imageUploadTimer: number | null = null;
     function uploadNewImages(body: string) {
-      if (imageUploadTimer) clearTimeout(imageUploadTimer);
-      imageUploadTimer = setTimeout(async () => {
+      if (imageUploadTimer) window.clearTimeout(imageUploadTimer);
+      imageUploadTimer = window.setTimeout(() => { void (async () => {
         imageUploadTimer = null;
         if (disposed) return;
         const imageNames = findImageEmbeds(body);
@@ -334,12 +335,11 @@ export async function startShareSync(
             await api!.uploadImage(permissionShareId, imgName, encryptedImg, mimeType);
             if (disposed) return;
             uploadedImages.add(imgName);
-            console.log(`Share sync: uploaded image ${imgName}`);
           } catch (e) {
             console.warn(`Share sync: failed to upload image ${imgName}:`, e);
           }
         }
-      }, 500);
+      })(); }, 500);
     }
 
     // Connect WebSocket to same room as web editor
@@ -394,7 +394,7 @@ export async function startShareSync(
           ytext.insert(0, body);
         } else if (ytext.length > 0) {
           // Server has content — update local body, preserve frontmatter
-          const remote = ytext.toString();
+          const remote = ytext.toJSON();
           if (remote !== body) {
             if (disposed) return;
             await app.vault.modify(file, frontmatter + remote);
@@ -409,8 +409,8 @@ export async function startShareSync(
 
       // Sync any missing images after initial content sync
       if (!disposed && api && encryptionKey) {
-        syncMissingImages(ytext.toString());
-        uploadNewImages(ytext.toString());
+        syncMissingImages(ytext.toJSON());
+        uploadNewImages(ytext.toJSON());
       }
     };
     provider.on('sync', onSync);
@@ -426,14 +426,15 @@ export async function startShareSync(
       if (changed.path !== file.path || writingToFile || disposed) return;
       writingToYjs = true;
       try {
-        const fileContent = await app.vault.read(changed as TFile);
+        if (!(changed instanceof TFile)) return;
+        const fileContent = await app.vault.read(changed);
         if (disposed) return;
         const { frontmatter, body } = parseFrontmatter(fileContent);
         if (!hasMatchingEditableShareIdentity(frontmatter, shareId)) {
           stopShareSync(app, file.path);
           return;
         }
-        const current = ytext.toString();
+        const current = ytext.toJSON();
         if (body !== current) {
           // Diff: find common prefix and suffix, only modify the changed portion
           let s = 0;
@@ -464,9 +465,9 @@ export async function startShareSync(
 
     const cleanupTimers = () => {
       disposed = true;
-      if (writeTimer) clearTimeout(writeTimer);
-      if (imageSyncTimer) clearTimeout(imageSyncTimer);
-      if (imageUploadTimer) clearTimeout(imageUploadTimer);
+      if (writeTimer) window.clearTimeout(writeTimer);
+      if (imageSyncTimer) window.clearTimeout(imageSyncTimer);
+      if (imageUploadTimer) window.clearTimeout(imageUploadTimer);
       writeTimer = null;
       imageSyncTimer = null;
       imageUploadTimer = null;
@@ -489,7 +490,7 @@ export async function startShareSync(
       let lastFailureReason: string | null = null;
       const FAILURE_THRESHOLD = 3; // require 3 consecutive same-reason failures before acting
 
-      const healthInterval = setInterval(async () => {
+      const healthInterval = window.setInterval(() => { void (async () => {
         try {
           const meta = await healthApi.getNoteMeta(permissionShareId);
           if (disposed) return;
@@ -541,7 +542,7 @@ export async function startShareSync(
               new Notice(`Colab: "${noteLabel}" — access revoked. Sync stopped.`, 0);
             } else if (reason === 'read_only') {
               new Notice(`Colab: "${noteLabel}" — now read-only. Sync stopped.`, 0);
-              await app.fileManager.processFrontMatter(file, (frontmatter) => {
+              await app.fileManager.processFrontMatter(file, (frontmatter: NoteColabFrontmatter) => {
                 frontmatter.colab_access = 'read_only';
               });
             }
@@ -550,16 +551,11 @@ export async function startShareSync(
         } catch {
           // Unexpected error — don't break sync
         }
-      }, 30_000);
+      })(); }, 30_000);
       const state = activeShareSyncs.get(file.path);
       if (state) state.healthInterval = healthInterval;
     }
 
-    provider.on('status', ({ status }: { status: string }) => {
-      if (status === 'connected') {
-        console.log(`Share sync connected: ${shareId}`);
-      }
-    });
   } finally {
     pendingProvider?.destroy();
     pendingDoc?.destroy();
@@ -575,7 +571,7 @@ export async function startShareSync(
 export function stopShareSync(app: App, filePath: string): void {
   const state = activeShareSyncs.get(filePath);
   if (!state) return;
-  if (state.healthInterval) clearInterval(state.healthInterval);
+  if (state.healthInterval) window.clearInterval(state.healthInterval);
   state.cleanupTimers();
   app.vault.offref(state.modifyRef);
   state.provider.destroy();

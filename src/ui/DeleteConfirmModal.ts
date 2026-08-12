@@ -1,4 +1,4 @@
-import { Modal, Setting, type App } from 'obsidian';
+import { Modal, type App } from 'obsidian';
 
 export class DeleteConfirmModal extends Modal {
   private noteTitle: string;
