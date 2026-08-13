@@ -6,6 +6,7 @@ import { decryptKeyFromSender } from '../../crypto/keyExchange';
 import { DirectoryKeyChangedError } from '../../crypto/identityTrust';
 import { stopShareSync } from '../../session/sessions';
 import { noteColabFrontmatter } from '../../share/frontmatter';
+import { isRecipientImport, recipientNoteTitle } from '../../share/readOnlyMirror';
 
 export const DASHBOARD_VIEW_TYPE = 'notecolab-dashboard';
 
@@ -30,6 +31,29 @@ export class DashboardView extends ItemView {
       if (shareId && key) keys.set(shareId, key);
     }
     return keys;
+  }
+
+  private collectLocalSharedNotes(serverShareIds: Set<string>) {
+    return this.app.vault.getMarkdownFiles().flatMap((file) => {
+      const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+      if (!fm || !isRecipientImport(fm)) return [];
+      const shareId = fm.colab_share_id;
+      const accessMode = fm.colab_access;
+      if (!shareId || !accessMode || serverShareIds.has(shareId)) return [];
+
+      return [{
+        noteId: 0,
+        title: recipientNoteTitle(file.basename),
+        encryptedTitle: null,
+        ownerUid: '',
+        shareId,
+        accessMode,
+        canEdit: accessMode !== 'read_only',
+        createdAt: new Date(file.stat.ctime).toISOString(),
+        updatedAt: new Date(file.stat.mtime).toISOString(),
+        localOnly: true,
+      }];
+    });
   }
 
   private async decryptTitle(encryptedTitle: string | null | undefined, key: string | undefined): Promise<string | null> {
@@ -122,7 +146,10 @@ export class DashboardView extends ItemView {
 
       if (!this.component) return; // view closed during fetch
 
-      if (!notesResult && !storage) {
+      const localSharedNotes = this.collectLocalSharedNotes(
+        new Set((sharedResult?.notes || []).map((note) => note.shareId)),
+      );
+      if (!notesResult && !storage && localSharedNotes.length === 0) {
         this.component.$set({
           loading: false,
           error: 'Failed to load data from server. Check your server URL and connection.',
@@ -182,7 +209,7 @@ export class DashboardView extends ItemView {
       this.component.$set({
         loading: false,
         notes: ownedNotes,
-        sharedNotes,
+        sharedNotes: [...sharedNotes, ...localSharedNotes],
         pendingShares: pending,
         storage: storage ? { ...storage, notes: storageNotes } : storage,
       });

@@ -6,6 +6,16 @@ export function isReadOnlyRecipient(frontmatter: Record<string, unknown> | undef
     && frontmatter.colab_share_id.length > 0;
 }
 
+/** True for a locally tracked note received from someone else. */
+export function isRecipientImport(frontmatter: Record<string, unknown> | undefined): boolean {
+  return frontmatter?.colab_owner === false
+    && typeof frontmatter.colab_share_id === 'string'
+    && frontmatter.colab_share_id.length > 0
+    && (frontmatter.colab_access === 'read_only'
+      || frontmatter.colab_access === 'public_edit'
+      || frontmatter.colab_access === 'invited_edit');
+}
+
 /** Remove NoteColab tracking fields while preserving ordinary frontmatter. */
 export function stripColabMetadata(content: string): string {
   const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
@@ -25,7 +35,12 @@ export function stripColabMetadata(content: string): string {
 
 /** Prefer the original title over the visible recipient marker. */
 export function editableCopyBasename(basename: string): string {
-  const marker = basename.lastIndexOf(' — NoteColab');
-  const title = marker > 0 ? basename.slice(0, marker) : basename;
+  const title = recipientNoteTitle(basename);
   return `${title.trimEnd() || 'Shared Note'} (local copy)`;
+}
+
+/** Remove the recipient marker used in vault filenames. */
+export function recipientNoteTitle(basename: string): string {
+  const marker = basename.lastIndexOf(' — NoteColab');
+  return marker > 0 ? basename.slice(0, marker) : basename;
 }

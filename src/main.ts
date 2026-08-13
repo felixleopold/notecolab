@@ -2,6 +2,7 @@ import {
   Menu,
   Notice,
   Plugin,
+  MarkdownView,
   editorInfoField,
   normalizePath,
   setIcon,
@@ -453,10 +454,20 @@ export default class ColabPlugin extends Plugin {
 
     this.registerMarkdownPostProcessor((el, context) => {
       const file = this.app.vault.getFileByPath(context.sourcePath);
-      if (!file || !this.isReadOnlyMirror(file)) return;
+      const readingView = el.closest('.markdown-reading-view');
+      if (!file || !this.isReadOnlyMirror(file)) {
+        readingView?.querySelectorAll('.notecolab-read-only-banner').forEach((banner) => banner.remove());
+        return;
+      }
       const mountBanner = () => {
-        const root = el.closest('.markdown-preview-view');
-        if (!root || root.querySelector('.notecolab-read-only-banner')) return false;
+        // Obsidian scrolls the reading-view container, not the rendered
+        // Markdown child. The banner must be a direct child of that scroller
+        // for position: sticky to follow the viewport.
+        const root = el.closest('.markdown-reading-view');
+        if (!root) return false;
+        const existing = root.querySelector<HTMLElement>('.notecolab-read-only-banner');
+        if (existing?.dataset.path === file.path) return true;
+        existing?.remove();
         root.prepend(this.createReadOnlyBanner(file));
         return true;
       };
@@ -464,6 +475,21 @@ export default class ColabPlugin extends Plugin {
         window.requestAnimationFrame(() => mountBanner());
       }
     });
+
+    this.registerEvent(
+      this.app.workspace.on('file-open', () => {
+        window.requestAnimationFrame(() => this.removeStaleReadOnlyBanner());
+      }),
+    );
+    this.app.workspace.onLayoutReady(() => this.removeStaleReadOnlyBanner());
+  }
+
+  private removeStaleReadOnlyBanner(): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view?.file || this.isReadOnlyMirror(view.file)) return;
+    view.containerEl
+      .querySelectorAll('.notecolab-read-only-banner')
+      .forEach((banner) => banner.remove());
   }
 
   private createReadOnlyPanel(file: TFile): Panel {
@@ -578,8 +604,8 @@ export default class ColabPlugin extends Plugin {
     if (!this.isReadOnlyMirror(file)) return;
     await this.refreshReadOnlyMirror(file);
     const content = stripColabMetadata(await this.app.vault.read(file));
-    const folder = file.parent?.path || '';
     const basename = editableCopyBasename(file.basename);
+    const folder = this.app.fileManager.getNewFileParent('', `${basename}.md`).path;
     let path = normalizePath(folder ? `${folder}/${basename}.md` : `${basename}.md`);
     let counter = 1;
     while (this.app.vault.getAbstractFileByPath(path)) {
@@ -592,7 +618,9 @@ export default class ColabPlugin extends Plugin {
     }
 
     const copy = await this.app.vault.create(path, content);
-    await this.app.workspace.getLeaf(false).openFile(copy);
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(copy);
+    this.removeStaleReadOnlyBanner();
     new Notice(`Created editable local copy: ${copy.basename}`);
   }
 

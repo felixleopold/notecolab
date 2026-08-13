@@ -42,6 +42,7 @@
     canEdit: boolean;
     createdAt: string;
     updatedAt: string;
+    localOnly?: boolean;
   }
 
   interface StorageNote {
@@ -324,7 +325,9 @@
                 </span>
               </div>
               <div class="note-meta">
-                <span>Owner {note.ownerUid ? note.ownerUid.substring(0, 12) + '…' : 'Unknown'}</span>
+                <span>{note.localOnly
+                  ? 'Imported into this vault'
+                  : `Owner ${note.ownerUid ? note.ownerUid.substring(0, 12) + '…' : 'Unknown'}`}</span>
                 <span>·</span>
                 <span>{formatAccessMode(note.accessMode)}</span>
                 <span>·</span>
@@ -335,12 +338,12 @@
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
                   Open
                 </button>
-                {#if confirmLeaveId === note.shareId}
+                {#if !note.localOnly && confirmLeaveId === note.shareId}
                   <button class="action-btn action-danger" on:click={() => { dispatch('leave-share', { shareId: note.shareId }); confirmLeaveId = null; }}>
                     Confirm remove
                   </button>
                   <button class="action-btn" on:click={() => confirmLeaveId = null}>Cancel</button>
-                {:else}
+                {:else if !note.localOnly}
                   <button class="action-btn action-danger" on:click={() => confirmLeaveId = note.shareId}>
                     Remove from list
                   </button>
