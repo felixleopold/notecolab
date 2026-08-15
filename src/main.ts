@@ -47,6 +47,7 @@ import {
 } from './share/shareOwnership';
 import { noteColabFrontmatter } from './share/frontmatter';
 import { OnboardingModal } from './ui/OnboardingModal';
+import { requestErrorMessage } from './api/errors';
 
 /** A decrypted incoming share awaiting the user's accept/deny decision. */
 interface IncomingShare {
@@ -102,6 +103,7 @@ export default class ColabPlugin extends Plugin {
   private lastStorageLevel: StorageLevel = 'ok';
   private usernamePromptOpen = false;
   private automaticConnection: Promise<boolean> | null = null;
+  private automaticConnectionError: string | null = null;
   private onboardingOpen = false;
 
   async onload() {
@@ -749,7 +751,8 @@ export default class ColabPlugin extends Plugin {
     if (!this.settings.apiKey) {
       const connected = await this.ensureAutomaticConnection();
       if (!connected) {
-        new Notice('Note Colab could not connect automatically. Check the server in Settings → Note Colab.');
+        new Notice(this.automaticConnectionError
+          || 'Note Colab could not connect automatically. Check the server in Settings → Note Colab.');
         return;
       }
     }
@@ -912,6 +915,7 @@ export default class ColabPlugin extends Plugin {
     if (this.automaticConnection) return this.automaticConnection;
 
     const connection = (async () => {
+      this.automaticConnectionError = null;
       try {
         const info = await this.api.getServerInfo();
         if (info?.registration?.mode && info.registration.mode !== 'open') return false;
@@ -926,6 +930,7 @@ export default class ColabPlugin extends Plugin {
         return true;
       } catch (error) {
         console.warn('Note Colab automatic connection failed:', error);
+        this.automaticConnectionError = requestErrorMessage(error) || null;
         return false;
       } finally {
         this.automaticConnection = null;
@@ -939,7 +944,8 @@ export default class ColabPlugin extends Plugin {
   private async maybeStartOnboarding(): Promise<void> {
     if (this.onboardingOpen || this.settings.onboardingState !== 'pending') return;
     if (!await this.ensureAutomaticConnection()) {
-      new Notice('Note Colab could not connect automatically. You can retry from Settings → Note Colab.');
+      new Notice(this.automaticConnectionError
+        || 'Note Colab could not connect automatically. You can retry from Settings → Note Colab.');
       return;
     }
 

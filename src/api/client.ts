@@ -2,22 +2,11 @@ import { requestUrl, type RequestUrlResponse } from 'obsidian';
 import type { ColabSettings, NoteContent, SessionInfo } from '../types';
 import { requestHeaders } from './credentials';
 import { directoryIdentityId, pinDirectoryPublicKey } from '../crypto/identityTrust';
+import { requestErrorMessage, requestErrorStatus } from './errors';
 
 function responseJson<T>(response: RequestUrlResponse): T {
   // Obsidian exposes parsed JSON as `any`; keep that untyped boundary in one place.
   return response.json as T;
-}
-
-function requestErrorStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !('status' in error)) return undefined;
-  return typeof error.status === 'number' ? error.status : undefined;
-}
-
-function requestErrorMessage(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null || !('json' in error)) return undefined;
-  const json: unknown = error.json;
-  if (typeof json !== 'object' || json === null || !('error' in json)) return undefined;
-  return typeof json.error === 'string' ? json.error : undefined;
 }
 
 export class ApiClient {

@@ -10,6 +10,7 @@ import {
   publicKeyFingerprint,
 } from '../crypto/identityTrust';
 import { noteColabFrontmatter } from '../share/frontmatter';
+import { requestErrorMessage, requestErrorStatus } from '../api/errors';
 
 /**
  * Only open http(s) checkout URLs. The URL is returned by the (user-configured,
@@ -489,10 +490,10 @@ export class ColabSettingsTab extends PluginSettingTab {
       return { ...registered, publicKey: kp.publicKey, secretKey: kp.secretKey };
     } catch (error) {
       console.error('Registration failed:', error);
-      const status = (error as { status?: number }).status;
-      new Notice(status === 403
+      const status = requestErrorStatus(error);
+      new Notice(requestErrorMessage(error) || (status === 403
         ? 'Registration was rejected — the invite code may be wrong, or this server is closed.'
-        : 'Server reachable but registration failed. Your current account was kept.');
+        : 'Server reachable but registration failed. Your current account was kept.'));
       return null;
     }
   }
