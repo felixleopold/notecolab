@@ -225,23 +225,21 @@ export async function startShareSync(
     pendingDoc = doc;
     const ytext = doc.getText('content');
 
-    // Directional flags to prevent loops:
-    // writingToFile = true while we modify the vault file from Yjs
+    // Directional guards to prevent loops:
+    // fileWritesInFlight > 0 while we modify the vault file from Yjs
     // writingToYjs = true while we update Yjs from a file change
-    let writingToFile = false;
+    let fileWritesInFlight = 0;
     let writingToYjs = false;
     let disposed = false;
 
     // Debounced file writer — batches rapid remote Yjs changes into a single file write
     let writeTimer: number | null = null;
-    function scheduleFileWrite() {
-      if (writeTimer) window.clearTimeout(writeTimer);
-      writeTimer = window.setTimeout(() => { void (async () => {
-        writeTimer = null;
+    let fileWriteQueue = Promise.resolve();
+    function queueFileWrite(): Promise<void> {
+      fileWriteQueue = fileWriteQueue.then(async () => {
         if (disposed) return;
-        writingToFile = true;
+        fileWritesInFlight++;
         try {
-          const remoteBody = ytext.toJSON();
           const fileContent = await app.vault.read(file);
           if (disposed) return;
           const { frontmatter, body } = parseFrontmatter(fileContent);
@@ -249,6 +247,7 @@ export async function startShareSync(
             stopShareSync(app, file.path);
             return;
           }
+          const remoteBody = ytext.toJSON();
           if (remoteBody !== body) {
             if (disposed) return;
             await app.vault.modify(file, frontmatter + remoteBody);
@@ -260,9 +259,18 @@ export async function startShareSync(
         } catch (e) {
           console.error('Share sync yjs→file error:', e);
         } finally {
-          writingToFile = false;
+          fileWritesInFlight--;
         }
-      })(); }, 50);
+      });
+      return fileWriteQueue;
+    }
+
+    function scheduleFileWrite() {
+      if (writeTimer) window.clearTimeout(writeTimer);
+      writeTimer = window.setTimeout(() => {
+        writeTimer = null;
+        void queueFileWrite();
+      }, 50);
     }
 
     // Download images referenced in synced text that are missing from the vault
@@ -378,8 +386,7 @@ export async function startShareSync(
       provider.off('sync', onSync);
       if (!synced) return;
 
-      writingToFile = true;
-      writingToYjs = true;
+      fileWritesInFlight++;
       try {
         const fileContent = await app.vault.read(file);
         if (disposed) return;
@@ -391,20 +398,24 @@ export async function startShareSync(
         if (ytext.length === 0 && body) {
           // Server doc empty — we're first peer, push body content
           if (disposed) return;
-          ytext.insert(0, body);
+          writingToYjs = true;
+          try {
+            ytext.insert(0, body);
+          } finally {
+            writingToYjs = false;
+          }
         } else if (ytext.length > 0) {
           // Server has content — update local body, preserve frontmatter
           const remote = ytext.toJSON();
           if (remote !== body) {
             if (disposed) return;
-            await app.vault.modify(file, frontmatter + remote);
+            await queueFileWrite();
           }
         }
       } catch (e) {
         console.error('Share sync initial sync error:', e);
       } finally {
-        writingToFile = false;
-        writingToYjs = false;
+        fileWritesInFlight--;
       }
 
       // Sync any missing images after initial content sync
@@ -423,8 +434,7 @@ export async function startShareSync(
 
     // Local file changes → update Yjs body only (diff-based, frontmatter excluded)
     const modifyRef = app.vault.on('modify', async (changed) => {
-      if (changed.path !== file.path || writingToFile || disposed) return;
-      writingToYjs = true;
+      if (changed.path !== file.path || fileWritesInFlight > 0 || disposed) return;
       try {
         if (!(changed instanceof TFile)) return;
         const fileContent = await app.vault.read(changed);
@@ -442,10 +452,15 @@ export async function startShareSync(
           let eo = current.length, en = body.length;
           while (eo > s && en > s && current[eo - 1] === body[en - 1]) { eo--; en--; }
           if (disposed) return;
-          doc.transact(() => {
-            if (eo > s) ytext.delete(s, eo - s);
-            if (en > s) ytext.insert(s, body.slice(s, en));
-          });
+          writingToYjs = true;
+          try {
+            doc.transact(() => {
+              if (eo > s) ytext.delete(s, eo - s);
+              if (en > s) ytext.insert(s, body.slice(s, en));
+            });
+          } finally {
+            writingToYjs = false;
+          }
         }
         // Upload any new images referenced in the local content
         if (!disposed && api && encryptionKey) {
@@ -458,8 +473,6 @@ export async function startShareSync(
         }
       } catch (e) {
         console.error('Share sync file→yjs error:', e);
-      } finally {
-        writingToYjs = false;
       }
     });
 
