@@ -1,5 +1,8 @@
 import { Modal, type App } from 'obsidian';
 
+const FEEDBACK_URL = 'https://github.com/felixleopold/notecolab/issues';
+const ONBOARDING_STEPS = 4;
+
 interface OnboardingOptions {
   serverUrl: string;
   onShare: () => void;
@@ -30,13 +33,14 @@ export class OnboardingModal extends Modal {
     contentEl.setCssStyles({ padding: '8px 8px 4px' });
 
     contentEl.createEl('div', {
-      text: `Step ${this.step} of 3`,
+      text: `Step ${this.step} of ${ONBOARDING_STEPS}`,
       cls: 'setting-item-description',
     }).setCssStyles({ marginBottom: '8px', fontWeight: '600' });
 
     if (this.step === 1) this.renderWelcome();
     if (this.step === 2) this.renderInstructions();
-    if (this.step === 3) this.renderFirstShare();
+    if (this.step === 3) this.renderFeedback();
+    if (this.step === 4) this.renderFirstShare();
 
     const footer = contentEl.createDiv();
     footer.setCssStyles({
@@ -60,7 +64,7 @@ export class OnboardingModal extends Modal {
       });
     }
 
-    if (this.step < 3) {
+    if (this.step < ONBOARDING_STEPS) {
       const next = controls.createEl('button', { text: 'Continue', cls: 'mod-cta' });
       next.addEventListener('click', () => {
         this.step += 1;
@@ -122,6 +126,20 @@ export class OnboardingModal extends Modal {
     for (const item of Array.from(list.children)) {
       (item as HTMLElement).setCssStyles({ marginBottom: '10px', paddingLeft: '4px' });
     }
+  }
+
+  private renderFeedback(): void {
+    this.contentEl.createEl('h2', { text: 'Help shape Note Colab' });
+    this.contentEl.createEl('p', {
+      text: 'Your feedback helps me decide what to improve next. Please tell me which features you would like to see and what, if anything, is holding you back from using Note Colab.',
+    });
+
+    const feedback = this.contentEl.createEl('button', {
+      text: 'Leave feedback on GitHub',
+      cls: 'mod-cta',
+    });
+    feedback.setCssStyles({ marginTop: '10px' });
+    feedback.addEventListener('click', () => window.open(FEEDBACK_URL, '_blank', 'noopener,noreferrer'));
   }
 
   private renderFirstShare(): void {
