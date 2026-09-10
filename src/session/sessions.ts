@@ -225,12 +225,36 @@ export async function startShareSync(
     pendingDoc = doc;
     const ytext = doc.getText('content');
 
-    // Directional guards to prevent loops:
-    // fileWritesInFlight > 0 while we modify the vault file from Yjs
-    // writingToYjs = true while we update Yjs from a file change
-    let fileWritesInFlight = 0;
+    // The file is a delayed replica, not a replacement for the live document.
+    // Keep its Yjs version so local edits cannot delete unseen remote characters.
+    const fileDoc = new Y.Doc();
+    const fileText = fileDoc.getText('content');
+    let initialized = false;
     let writingToYjs = false;
     let disposed = false;
+
+    function acceptFileEdit(body: string) {
+      const previous = fileText.toString();
+      if (body === previous) return;
+      let start = 0;
+      while (start < previous.length && start < body.length && previous[start] === body[start]) start++;
+      let oldEnd = previous.length, newEnd = body.length;
+      while (oldEnd > start && newEnd > start && previous[oldEnd - 1] === body[newEnd - 1]) {
+        oldEnd--;
+        newEnd--;
+      }
+      const version = Y.encodeStateVector(fileDoc);
+      fileDoc.transact(() => {
+        if (oldEnd > start) fileText.delete(start, oldEnd - start);
+        if (newEnd > start) fileText.insert(start, body.slice(start, newEnd));
+      });
+      writingToYjs = true;
+      try {
+        Y.applyUpdate(doc, Y.encodeStateAsUpdate(fileDoc, version));
+      } finally {
+        writingToYjs = false;
+      }
+    }
 
     // Debounced file writer — batches rapid remote Yjs changes into a single file write
     let writeTimer: number | null = null;
@@ -238,7 +262,6 @@ export async function startShareSync(
     function queueFileWrite(): Promise<void> {
       fileWriteQueue = fileWriteQueue.then(async () => {
         if (disposed) return;
-        fileWritesInFlight++;
         try {
           const fileContent = await app.vault.read(file);
           if (disposed) return;
@@ -247,19 +270,22 @@ export async function startShareSync(
             stopShareSync(app, file.path);
             return;
           }
+          if (initialized) acceptFileEdit(body);
           const remoteBody = ytext.toJSON();
+          const mirroredVersion = Y.encodeStateAsUpdate(doc, Y.encodeStateVector(fileDoc));
           if (remoteBody !== body) {
             if (disposed) return;
             await app.vault.modify(file, frontmatter + remoteBody);
           }
+          if (disposed) return;
+          Y.applyUpdate(fileDoc, mirroredVersion);
+          initialized = true;
           // After writing text, sync any missing images
           if (!disposed && api && encryptionKey) {
             syncMissingImages(remoteBody);
           }
         } catch (e) {
           console.error('Share sync yjs→file error:', e);
-        } finally {
-          fileWritesInFlight--;
         }
       });
       return fileWriteQueue;
@@ -383,10 +409,9 @@ export async function startShareSync(
 
     // After initial sync with server, initialize content if needed
     const onSync = async (synced: boolean) => {
-      provider.off('sync', onSync);
       if (!synced) return;
+      provider.off('sync', onSync);
 
-      fileWritesInFlight++;
       try {
         const fileContent = await app.vault.read(file);
         if (disposed) return;
@@ -404,18 +429,13 @@ export async function startShareSync(
           } finally {
             writingToYjs = false;
           }
-        } else if (ytext.length > 0) {
-          // Server has content — update local body, preserve frontmatter
-          const remote = ytext.toJSON();
-          if (remote !== body) {
-            if (disposed) return;
-            await queueFileWrite();
-          }
         }
+        // Establish the file's exact Yjs version before accepting file events.
+        await queueFileWrite();
+        if (disposed) return;
+        scheduleFileWrite();
       } catch (e) {
         console.error('Share sync initial sync error:', e);
-      } finally {
-        fileWritesInFlight--;
       }
 
       // Sync any missing images after initial content sync
@@ -428,56 +448,47 @@ export async function startShareSync(
 
     // Remote Yjs changes → schedule file write
     ytext.observe(() => {
-      if (writingToYjs) return; // ignore our own Yjs changes
+      if (writingToYjs || !initialized) return;
       scheduleFileWrite();
     });
 
     // Local file changes → update Yjs body only (diff-based, frontmatter excluded)
-    const modifyRef = app.vault.on('modify', async (changed) => {
-      if (changed.path !== file.path || fileWritesInFlight > 0 || disposed) return;
-      try {
-        if (!(changed instanceof TFile)) return;
-        const fileContent = await app.vault.read(changed);
+    const modifyRef = app.vault.on('modify', (changed) => {
+      if (changed.path !== file.path || !initialized || disposed) return;
+      // Read after queued writes finish, including notifications delivered after
+      // vault.modify resolves. Both directions must use the same file version.
+      fileWriteQueue = fileWriteQueue.then(async () => {
         if (disposed) return;
-        const { frontmatter, body } = parseFrontmatter(fileContent);
-        if (!hasMatchingEditableShareIdentity(frontmatter, shareId)) {
-          stopShareSync(app, file.path);
-          return;
-        }
-        const current = ytext.toJSON();
-        if (body !== current) {
-          // Diff: find common prefix and suffix, only modify the changed portion
-          let s = 0;
-          while (s < current.length && s < body.length && current[s] === body[s]) s++;
-          let eo = current.length, en = body.length;
-          while (eo > s && en > s && current[eo - 1] === body[en - 1]) { eo--; en--; }
+        try {
+          if (!(changed instanceof TFile)) return;
+          const fileContent = await app.vault.read(changed);
           if (disposed) return;
-          writingToYjs = true;
-          try {
-            doc.transact(() => {
-              if (eo > s) ytext.delete(s, eo - s);
-              if (en > s) ytext.insert(s, body.slice(s, en));
-            });
-          } finally {
-            writingToYjs = false;
+          const { frontmatter, body } = parseFrontmatter(fileContent);
+          if (!hasMatchingEditableShareIdentity(frontmatter, shareId)) {
+            stopShareSync(app, file.path);
+            return;
           }
+          acceptFileEdit(body);
+          if (body !== ytext.toString()) scheduleFileWrite();
+          // Upload any new images referenced in the local content
+          if (!disposed && api && encryptionKey) {
+            uploadNewImages(body);
+          }
+          // Persist the snapshot too, so edits survive even when no web peer is
+          // connected to bridge Yjs → server (the relay holds no durable state).
+          if (!disposed && api && encryptionKey) {
+            publishSnapshot(app, api, file, shareId, encryptionKey, 800, permissionShareId);
+          }
+        } catch (e) {
+          console.error('Share sync file→yjs error:', e);
         }
-        // Upload any new images referenced in the local content
-        if (!disposed && api && encryptionKey) {
-          uploadNewImages(body);
-        }
-        // Persist the snapshot too, so edits survive even when no web peer is
-        // connected to bridge Yjs → server (the relay holds no durable state).
-        if (!disposed && api && encryptionKey) {
-          publishSnapshot(app, api, file, shareId, encryptionKey, 800, permissionShareId);
-        }
-      } catch (e) {
-        console.error('Share sync file→yjs error:', e);
-      }
+      });
+      return fileWriteQueue;
     });
 
     const cleanupTimers = () => {
       disposed = true;
+      fileDoc.destroy();
       if (writeTimer) window.clearTimeout(writeTimer);
       if (imageSyncTimer) window.clearTimeout(imageSyncTimer);
       if (imageUploadTimer) window.clearTimeout(imageUploadTimer);
