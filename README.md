@@ -123,6 +123,10 @@ not move shares, contacts, or account settings between servers.
 
 ## Troubleshooting
 
+- **Typing disappears or the cursor jumps while another sync plugin is active:**
+  If you use SimpleSync, update it to version 0.1.28 or later on affected devices.
+  Older builds can overwrite recent edits. Test with a disposable shared note
+  open in both Obsidian and the web editor after updating.
 - **Share current note does nothing:** Make sure a Markdown note is open and
   active, then try **Note Colab: Share note** from the command palette.
 - **Automatic connection fails:** Open **Settings → Note Colab**, confirm the
