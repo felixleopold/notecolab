@@ -37,6 +37,16 @@ const activeShareSyncs = new Map<string, ShareSyncState>();
 const startingShareSyncs = new Map<string, string>();
 const startingSharePaths = new Map<string, string>();
 let shareSyncGeneration = 0;
+const shareSyncListeners = new Set<() => void>();
+
+export function onShareSyncChange(listener: () => void): () => void {
+  shareSyncListeners.add(listener);
+  return () => shareSyncListeners.delete(listener);
+}
+
+function notifyShareSyncChange() {
+  for (const listener of shareSyncListeners) listener();
+}
 
 /** Get the MIME type for common image extensions */
 function getMimeType(filename: string): string {
@@ -506,6 +516,7 @@ export async function startShareSync(
     });
     pendingDoc = null;
     pendingProvider = null;
+    notifyShareSyncChange();
 
     // Periodic health check: detect expiry or permission changes
     if (api) {
@@ -601,6 +612,7 @@ export function stopShareSync(app: App, filePath: string): void {
   state.provider.destroy();
   state.doc.destroy();
   activeShareSyncs.delete(filePath);
+  notifyShareSyncChange();
   cancelSnapshot(filePath);
 }
 
@@ -618,6 +630,7 @@ export function renameShareSync(oldPath: string, newPath: string): void {
     activeShareSyncs.delete(oldPath);
     state.filePath = newPath;
     activeShareSyncs.set(newPath, state);
+    notifyShareSyncChange();
   }
 
   // Snapshot debounce + "last published body" are keyed by path too.

@@ -14,10 +14,12 @@ import { DEFAULT_SETTINGS, OFFICIAL_SERVER_URL, initialOnboardingState, initialU
 import { ApiClient } from './api/client';
 import { shareNote, revokeShare, copyShareLink } from './share/shareNote';
 import { importNote, foreignOrigin } from './share/importNote';
-import { startShareSync, getShareSync, getShareSyncShareId, getShareSyncPathByShareId, getShareSyncStatus, stopShareSync, destroyAllShareSyncs, publishSnapshot, cancelSnapshot, renameShareSync, parseFrontmatter } from './session/sessions';
+import { onShareSyncChange, startShareSync, getShareSync, getShareSyncShareId, getShareSyncPathByShareId, getShareSyncStatus, stopShareSync, destroyAllShareSyncs, publishSnapshot, cancelSnapshot, renameShareSync, parseFrontmatter } from './session/sessions';
 import { generateKeyPair, decryptKeyFromSender } from './crypto/keyExchange';
 import { DirectoryKeyChangedError } from './crypto/identityTrust';
-import { decrypt, encrypt } from './crypto/crypto';
+import { decrypt, encrypt, deriveRoomToken } from './crypto/crypto';
+import { websocketCredentials } from './api/credentials';
+import { NotePresence, isForeground } from './session/presence';
 import { ShareModalView } from './ui/views/ShareModalView';
 import { ImportModal } from './ui/ImportModal';
 import { ManageLinksModalView } from './ui/views/ManageLinksModalView';
@@ -73,6 +75,10 @@ export default class ColabPlugin extends Plugin {
   api!: ApiClient;
   private statusBarItem: HTMLElement | null = null;
   private statusBarInterval: number | null = null;
+  private presence: NotePresence | null = null;
+  private presenceIdentity = '';
+  private presenceProvider: NonNullable<ReturnType<typeof getShareSync>>['provider'] | undefined;
+  private presenceWindows = new WeakSet<Window>();
   private pendingSharesInterval: number | null = null;
   // Cache shared note info so we can prompt on delete (frontmatter gone after deletion)
   private sharedNoteCache = new Map<string, {
@@ -125,6 +131,34 @@ export default class ColabPlugin extends Plugin {
 
     // Status bar
     this.statusBarItem = this.addStatusBarItem();
+    const showParticipants = (event?: MouseEvent) => {
+      const roster = this.presence?.roster;
+      if (!roster) return;
+      const menu = new Menu();
+      for (const person of roster.participants) {
+        menu.addItem(item => item.setTitle(
+          `${person.id === roster.selfId ? 'You' : person.name} · ${person.client === 'web' ? 'Web' : 'Obsidian'}`,
+        ).setDisabled(true));
+      }
+      if (!roster.participants.length) menu.addItem(item => item.setTitle('No one here').setDisabled(true));
+      if (event) menu.showAtMouseEvent(event);
+      else if (this.statusBarItem) {
+        const rect = this.statusBarItem.getBoundingClientRect();
+        menu.showAtPosition({ x: rect.left, y: rect.top });
+      }
+    };
+    this.registerDomEvent(this.statusBarItem, 'click', event => showParticipants(event));
+    this.registerDomEvent(this.statusBarItem, 'keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        showParticipants();
+      }
+    });
+    this.register(onShareSyncChange(() => this.updateStatusBar()));
+    this.watchPresenceWindow(window);
+    this.registerEvent(this.app.workspace.on('window-open', (_workspaceWindow, openedWindow) => {
+      this.watchPresenceWindow(openedWindow);
+    }));
     this.updateStatusBar();
 
     // Register dashboard view
@@ -884,6 +918,10 @@ export default class ColabPlugin extends Plugin {
   }
 
   onunload() {
+    this.statusBarItem = null;
+    this.presenceIdentity = '';
+    this.presence?.destroy();
+    this.presence = null;
     if (this.statusBarInterval) window.clearInterval(this.statusBarInterval);
     if (this.pendingSharesInterval) window.clearInterval(this.pendingSharesInterval);
     if (this.readOnlyRefreshInterval) window.clearInterval(this.readOnlyRefreshInterval);
@@ -1108,8 +1146,61 @@ export default class ColabPlugin extends Plugin {
     );
   }
 
+  private watchPresenceWindow(target: Window) {
+    if (this.presenceWindows.has(target)) return;
+    this.presenceWindows.add(target);
+    this.registerDomEvent(target, 'focus', () => this.updateStatusBar());
+    this.registerDomEvent(target, 'blur', () => this.updateStatusBar());
+    this.registerDomEvent(target.document, 'visibilitychange', () => this.updateStatusBar());
+  }
+
+  private updatePresence() {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const file = view?.file;
+    const fm = file && noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+    const provider = file ? getShareSync(file.path)?.provider : undefined;
+    const supported = fm?.colab_share_id && fm.colab_link
+      && (provider || fm.colab_access === 'read_only');
+    const identity = supported ? JSON.stringify([
+      file?.path, fm.colab_share_id, fm.colab_link, fm.colab_link_id,
+      fm.colab_encryption_key, this.settings.serverUrl, this.settings.apiKey,
+    ]) : '';
+    if (identity !== this.presenceIdentity || provider !== this.presenceProvider) {
+      this.presence?.destroy();
+      this.presence = null;
+      this.presenceIdentity = identity;
+      this.presenceProvider = provider;
+      if (supported) {
+        const presence = new NotePresence(() => this.updateStatusBar());
+        this.presence = presence;
+        if (provider) {
+          presence.attach(provider);
+        } else {
+          const key = fm.colab_encryption_key || fm.colab_link!.split('#')[1];
+          const shareId = fm.colab_share_id!;
+          const linkId = fm.colab_link_id || shareIdFromLink(fm.colab_link) || shareId;
+          const origin = foreignOrigin(fm.colab_link, this.settings.serverUrl) || this.settings.serverUrl;
+          const credentials = websocketCredentials(this.settings.apiKey, this.apiFor(fm.colab_link).usesAccountCredentials);
+          void (async () => {
+            const roomToken = key ? await deriveRoomToken(key, shareId) : '';
+            if (this.presence !== presence) return;
+            const url = new URL(`${origin.replace(/^http/, 'ws')}/ws/yjs/${encodeURIComponent(shareId)}`);
+            url.search = new URLSearchParams({ ...credentials, link: linkId, presence: '1', ...(roomToken ? { rt: roomToken } : {}) }).toString();
+            presence.connect(url.toString());
+          })().catch(() => { /* Keep the disconnected indicator; retry after the next note switch. */ });
+        }
+      }
+    }
+    if (view) {
+      const document = view.containerEl.ownerDocument;
+      if (document.defaultView) this.watchPresenceWindow(document.defaultView);
+      this.presence?.setActive(isForeground(document));
+    }
+  }
+
   private updateStatusBar() {
     if (!this.statusBarItem) return;
+    this.updatePresence();
 
     const file = this.app.workspace.getActiveFile();
     if (!file) {
@@ -1136,6 +1227,17 @@ export default class ColabPlugin extends Plugin {
       this.statusBarItem.setCssStyles({ color: '' });
     } else {
       this.statusBarItem.setText('');
+    }
+    if (this.presence) {
+      const syncText = this.statusBarItem.textContent || 'Colab';
+      this.statusBarItem.setText(`${syncText} · ${this.presence.label}`);
+      this.statusBarItem.setAttribute('role', 'button');
+      this.statusBarItem.tabIndex = 0;
+      this.statusBarItem.setAttribute('aria-label', `${syncText}. ${this.presence.label}. Show participants`);
+    } else {
+      this.statusBarItem.removeAttribute('aria-label');
+      this.statusBarItem.removeAttribute('role');
+      this.statusBarItem.removeAttribute('tabindex');
     }
   }
 

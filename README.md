@@ -90,6 +90,20 @@ Editable notes synchronize while they are open. Use **Stop share sync** to stop
 the live connection without removing the share. Use **Revoke note share** to
 remove the server copy and disable its links.
 
+The bottom-right status indicator shows **Only you here** or **You + N others**
+for the current note. Click it to see participants and their public usernames,
+when set. The web reader and editor show the same presence information.
+You count while the note is the active tab in a focused, visible window.
+Switching tabs or apps removes you from the count without stopping background
+sync. Multiple connections from one signed-in account count once per note;
+anonymous sessions count separately. Older clients without foreground reporting
+are not included, and a disconnected client cannot show a current count.
+
+Your public username and foreground presence are visible to the hosting server
+and people with access to the note, including anonymous link visitors. Full User
+IDs and private trusted-contact aliases are not included in the participant list.
+Presence is temporary and does not record an activity history.
+
 Open the dashboard from the ribbon or run **Note Colab: Open dashboard** to:
 
 - share the active note;
