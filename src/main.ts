@@ -921,8 +921,9 @@ export default class ColabPlugin extends Plugin {
   }
 
   private async reviewAndPublishFolder(choice: FolderShareChoice): Promise<void> {
-    if (!this.settings.apiKey && !await this.ensureAutomaticConnection()) {
-      new Notice(this.automaticConnectionError || 'Note Colab could not connect automatically.');
+    if (!this.settings.apiKey) {
+      new Notice('Connect in Settings → Note Colab before sharing a folder.');
+      await this.maybeStartOnboarding();
       return;
     }
     const folderPath = normalizePath(choice.folderPath).replace(/\/$/, '');
@@ -1135,12 +1136,9 @@ export default class ColabPlugin extends Plugin {
 
   async shareCurrentNote(): Promise<void> {
     if (!this.settings.apiKey) {
-      const connected = await this.ensureAutomaticConnection();
-      if (!connected) {
-        new Notice(this.automaticConnectionError
-          || 'Note Colab could not connect automatically. Check the server in Settings → Note Colab.');
-        return;
-      }
+      new Notice('Connect in Settings → Note Colab before sharing a note.');
+      await this.maybeStartOnboarding();
+      return;
     }
 
     const file = this.app.workspace.getActiveFile();

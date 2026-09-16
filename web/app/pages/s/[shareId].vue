@@ -83,7 +83,7 @@ import { WebsocketProvider } from 'y-websocket'
 import type { Awareness } from 'y-protocols/awareness'
 import { trackPresence, type PresenceRoster } from '~/utils/presence'
 import { buildSharePreview } from '~/utils/sharePreview'
-import { mergeDeviceCheckpoint, seedServerSnapshot } from '~/utils/checkpointMerge'
+import { initializeCollaborationDocument, refreshReadOnlySnapshot } from '~/utils/checkpointMerge'
 import { parseFolderManifest, type FolderManifest } from '~/utils/folderManifest'
 
 const route = useRoute()
@@ -334,7 +334,7 @@ function queueLocalCheckpoint(value: string, generation: number): Promise<boolea
 }
 
 async function persistLocalCheckpoint() {
-  if (!yjsDoc || !encKey || !import.meta.client) return
+  if (!canEdit.value || !yjsDoc || !encKey || !import.meta.client) return
   const generation = ++localCheckpointGeneration
   const encrypted = await encrypt(bytesToBase64(Y.encodeStateAsUpdate(yjsDoc)), encKey)
   if (generation !== localCheckpointGeneration) return
@@ -571,25 +571,35 @@ async function setupYjsCollab() {
   ytext = yjsDoc.getText('content')
   const storedBody = decryptedContent.value
 
+  let serverUpdate: Uint8Array | null = null
   if (initialEncryptedCrdt) {
     try {
-      Y.applyUpdate(yjsDoc, base64ToBytes(await decrypt(initialEncryptedCrdt, encKey)))
+      serverUpdate = base64ToBytes(await decrypt(initialEncryptedCrdt, encKey))
     } catch {
-      await seedServerSnapshot(yjsDoc, decryptedContent.value, roomId, contentVersion)
+      serverUpdate = null
     }
-  } else if (decryptedContent.value) {
-    await seedServerSnapshot(yjsDoc, decryptedContent.value, roomId, contentVersion)
   }
-  if (import.meta.client) {
+  let deviceUpdate: Uint8Array | null = null
+  if (canEdit.value && import.meta.client) {
     const localCheckpoint = await readLocalCheckpoint()
     if (localCheckpoint) {
       try {
-        mergeDeviceCheckpoint(yjsDoc, base64ToBytes(await decrypt(localCheckpoint, encKey)))
+        deviceUpdate = base64ToBytes(await decrypt(localCheckpoint, encKey))
       } catch {
         await deleteLocalCheckpoint()
       }
     }
   }
+  const initialized = await initializeCollaborationDocument(yjsDoc, {
+    body: decryptedContent.value,
+    roomId,
+    version: contentVersion,
+    serverUpdate,
+    deviceUpdate,
+    editable: canEdit.value,
+  })
+  if (initialized.invalidDeviceCheckpoint) await deleteLocalCheckpoint()
+  if (!initialized.restoredServerCrdt) initialSnapshotNeeded = true
   if (ytext.toString() !== storedBody) initialSnapshotNeeded = true
   decryptedContent.value = ytext.toString()
 
@@ -707,9 +717,11 @@ function cleanup() {
     clearTimeout(saveTimeout)
     saveTimeout = null
   }
-  void persistLocalCheckpoint()
-  // Fire an immediate save before disconnecting
-  saveNow()
+  if (canEdit.value) {
+    void persistLocalCheckpoint()
+    // Fire an immediate save before disconnecting
+    saveNow()
+  }
   if (wsProvider) {
     stopPresence?.()
     stopPresence = null
@@ -733,7 +745,22 @@ async function onVisibilityChange() {
     const { data: note } = await api.getNoteContent(noteShareId)
     if (!note) return
     const content = await decrypt(note.encryptedContent, encKey)
-    if (note.contentVersion > contentVersion && yjsDoc && note.encryptedCrdt) {
+    if (note.contentVersion > contentVersion && !canEdit.value) {
+      let update: Uint8Array | null = null
+      if (note.encryptedCrdt) {
+        try {
+          update = base64ToBytes(await decrypt(note.encryptedCrdt, encKey))
+        } catch {
+          update = null
+        }
+      }
+      // Treat the newer REST snapshot as authoritative. Using the provider as
+      // the transaction origin prevents this local reader refresh from being
+      // relayed as an edit.
+      if (yjsDoc) refreshReadOnlySnapshot(yjsDoc, content, update, wsProvider)
+      decryptedContent.value = ytext?.toString() ?? content
+      contentVersion = note.contentVersion
+    } else if (note.contentVersion > contentVersion && yjsDoc && note.encryptedCrdt) {
       const update = await decrypt(note.encryptedCrdt, encKey)
       Y.applyUpdate(yjsDoc, base64ToBytes(update))
       contentVersion = note.contentVersion
