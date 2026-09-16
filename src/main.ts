@@ -10,11 +10,12 @@ import {
   type WorkspaceLeaf,
 } from 'obsidian';
 import { EditorView, showPanel, type Panel } from '@codemirror/view';
-import { DEFAULT_SETTINGS, OFFICIAL_SERVER_URL, initialOnboardingState, initialUsernamePromptState, migrateOfficialServerUrl, type ColabSettings } from './types';
+import { liveCursors } from './collaboration/liveCursors';
+import { DEFAULT_SETTINGS, OFFICIAL_SERVER_URL, initialOnboardingState, initialUsernamePromptState, isOfficialServerAlias, migrateOfficialServerUrl, type ColabSettings, type FolderSubscription } from './types';
 import { ApiClient } from './api/client';
 import { shareNote, revokeShare, copyShareLink } from './share/shareNote';
 import { importNote, foreignOrigin } from './share/importNote';
-import { onShareSyncChange, startShareSync, getShareSync, getShareSyncShareId, getShareSyncPathByShareId, getShareSyncStatus, stopShareSync, destroyAllShareSyncs, publishSnapshot, cancelSnapshot, renameShareSync, parseFrontmatter } from './session/sessions';
+import { onShareSyncChange, startShareSync, getShareSync, getShareSyncShareId, getShareSyncPathByShareId, getShareSyncStatus, getShareSaveState, stopShareSync, destroyAllShareSyncs, publishSnapshot, cancelSnapshot, renameShareSync, parseFrontmatter, recoverPreviousSnapshot } from './session/sessions';
 import { generateKeyPair, decryptKeyFromSender } from './crypto/keyExchange';
 import { DirectoryKeyChangedError } from './crypto/identityTrust';
 import { decrypt, encrypt, deriveRoomToken } from './crypto/crypto';
@@ -50,6 +51,19 @@ import {
 import { noteColabFrontmatter } from './share/frontmatter';
 import { OnboardingModal } from './ui/OnboardingModal';
 import { requestErrorMessage } from './api/errors';
+import { publishFolder, type FolderShareState } from './share/folderShare';
+import { FolderShareSync } from './share/folderSync';
+import { importFolderShare, loadFolderShare, type LoadedFolderShare } from './share/folderImport';
+import { FolderPublishPreviewModal, FolderShareModal, type FolderShareChoice } from './ui/FolderShareModal';
+import {
+  FolderImportLinkModal,
+  FolderImportPreviewModal,
+  FolderSubscriptionPromptModal,
+  FolderSubscriptionsModal,
+  FolderUpdatePreviewModal,
+} from './ui/FolderImportModal';
+import { FolderProgressModal } from './ui/FolderProgressModal';
+import { RecoveryConfirmModal } from './ui/RecoveryConfirmModal';
 
 /** A decrypted incoming share awaiting the user's accept/deny decision. */
 interface IncomingShare {
@@ -111,10 +125,26 @@ export default class ColabPlugin extends Plugin {
   private automaticConnection: Promise<boolean> | null = null;
   private automaticConnectionError: string | null = null;
   private onboardingOpen = false;
+  private folderShareSync: FolderShareSync | null = null;
+  private folderSubscriptionInterval: number | null = null;
+  private checkingFolderSubscriptions = false;
+  private pendingFolderSubscriptionPrompts = new Set<string>();
 
   async onload() {
     await this.loadSettings();
     this.api = new ApiClient(this.settings, () => this.saveSettings());
+    this.registerEditorExtension(liveCursors(() => this.settings.username));
+    this.folderShareSync = new FolderShareSync(this.app, () => new ApiClient({ ...this.settings }), {
+      getServerUrl: () => this.settings.serverUrl,
+      getOwnerUid: () => this.settings.uid,
+      getStates: () => this.settings.folderShares.filter((state) => this.folderShareUsesCurrentServer(state)),
+      saveState: (state) => this.saveFolderShareState(state),
+      canPublishEditable: (path) => getShareSyncStatus(path) === 'connected',
+      onResult: (result) => {
+        if (result.failed.length) console.warn('NoteColab: automatic folder publish needs attention', result.failed);
+      },
+    });
+    this.folderShareSync.start();
 
     // Ensure we have a keypair (for users who registered before this feature)
     if (this.settings.apiKey && !this.settings.publicKey) {
@@ -206,6 +236,48 @@ export default class ColabPlugin extends Plugin {
             saveSettings: () => this.saveSettings(),
           });
         }).open();
+      },
+    });
+
+    this.addCommand({
+      id: 'share-folder',
+      name: 'Share folder',
+      callback: () => new FolderShareModal(this.app, (choice) => {
+        void this.reviewAndPublishFolder(choice);
+      }).open(),
+    });
+
+    this.addCommand({
+      id: 'import-shared-folder',
+      name: 'Import shared folder',
+      callback: () => new FolderImportLinkModal(this.app, (url) => {
+        void this.previewAndImportFolder(url);
+      }).open(),
+    });
+
+    this.addCommand({
+      id: 'manage-shared-folder-subscriptions',
+      name: 'Manage watched shared folders',
+      callback: () => new FolderSubscriptionsModal(
+        this.app,
+        this.settings.folderSubscriptions,
+        this.settings.folderShares.filter((state) => this.folderShareUsesCurrentServer(state)),
+        (manifestUrl) => { void this.unsubscribeFolder(manifestUrl); },
+        (state, watching) => { void this.setFolderShareWatching(state, watching); },
+      ).open(),
+    });
+
+    this.addCommand({
+      id: 'recover-previous-shared-note-version',
+      name: 'Recover previous shared note version to new file',
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        const fm = file && noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+        if (!file || !fm?.colab_share_id || !fm.colab_encryption_key || fm.colab_access === 'read_only') return false;
+        if (!checking) {
+          new RecoveryConfirmModal(this.app, () => { void this.recoverSharedNoteVersion(file); }).open();
+        }
+        return true;
       },
     });
 
@@ -415,8 +487,13 @@ export default class ColabPlugin extends Plugin {
       window.setTimeout(() => {
         void this.checkPendingShares();
         void this.maybeWarnStorage();
+        void this.checkFolderSubscriptions();
       }, 5000);
     });
+    this.folderSubscriptionInterval = window.setInterval(
+      () => { void this.checkFolderSubscriptions(); },
+      5 * 60_000,
+    );
 
     // Build initial shared note cache for delete detection
     this.app.workspace.onLayoutReady(() => {
@@ -613,7 +690,7 @@ export default class ColabPlugin extends Plugin {
   private updateReadOnlyBanner(banner: HTMLElement, path: string): void {
     const status = banner.querySelector<HTMLElement>('.notecolab-read-only-status');
     if (!status) return;
-    status.setText(this.refreshingReadOnlyMirrors.has(path) ? 'Updating…' : '✓ Synced');
+    status.setText(this.refreshingReadOnlyMirrors.has(path) ? 'Updating…' : 'Read-only copy');
   }
 
   private updateReadOnlyBanners(path: string): void {
@@ -781,6 +858,281 @@ export default class ColabPlugin extends Plugin {
     }
   }
 
+  private async saveFolderShareState(state: FolderShareState): Promise<void> {
+    const index = this.settings.folderShares.findIndex((item) => item.folderPath === state.folderPath && item.serverUrl === state.serverUrl && item.ownerUid === state.ownerUid);
+    if (index >= 0) {
+      const current = this.settings.folderShares[index];
+      this.settings.folderShares[index] = { ...state, watching: current.watching };
+    }
+    else this.settings.folderShares.push(state);
+    await this.saveSettings();
+  }
+
+  private async setFolderShareWatching(state: FolderShareState, watching: boolean): Promise<void> {
+    const current = this.settings.folderShares.find((item) => item.folderPath === state.folderPath
+      && item.serverUrl === state.serverUrl
+      && item.ownerUid === state.ownerUid);
+    if (!current) return;
+    current.watching = watching;
+    await this.saveSettings();
+    this.folderShareSync?.setWatching(current.folderPath, watching);
+    new Notice(watching
+      ? `Watching ${current.folderPath}. New Markdown files will publish automatically.`
+      : `Stopped watching ${current.folderPath}. Existing shares remain active.`);
+  }
+
+  private async recoverSharedNoteVersion(file: TFile): Promise<void> {
+    const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+    const shareId = fm?.colab_share_id;
+    const encryptionKey = fm?.colab_encryption_key;
+    if (!shareId || !encryptionKey || fm.colab_access === 'read_only') return;
+    const linkShareId = fm.colab_link_id || shareIdFromLink(fm.colab_link) || shareId;
+    try {
+      const recovered = await recoverPreviousSnapshot(
+        this.app,
+        this.apiFor(fm.colab_link),
+        file,
+        shareId,
+        encryptionKey,
+        linkShareId,
+      );
+      if (!recovered) {
+        new Notice('No recoverable encrypted revision is available for this account.');
+        return;
+      }
+      await this.app.workspace.getLeaf('tab').openFile(recovered);
+      new Notice(`Recovered previous version to ${recovered.path}. The shared note was not changed.`);
+    } catch (error) {
+      new Notice(`Could not recover previous version: ${requestErrorMessage(error) || String(error)}`);
+    }
+  }
+
+  private folderShareUsesCurrentServer(state: FolderShareState): boolean {
+    if (state.ownerUid && state.ownerUid !== this.settings.uid) return false;
+    const server = state.serverUrl || state.manifest?.shareUrl || Object.values(state.entries)[0]?.shareUrl;
+    if (!server) return true;
+    try {
+      const shareOrigin = new URL(server).origin;
+      const currentOrigin = new URL(this.settings.serverUrl).origin;
+      return shareOrigin === currentOrigin || isOfficialServerAlias(shareOrigin, currentOrigin);
+    } catch {
+      return false;
+    }
+  }
+
+  private async reviewAndPublishFolder(choice: FolderShareChoice): Promise<void> {
+    if (!this.settings.apiKey && !await this.ensureAutomaticConnection()) {
+      new Notice(this.automaticConnectionError || 'Note Colab could not connect automatically.');
+      return;
+    }
+    const folderPath = normalizePath(choice.folderPath).replace(/\/$/, '');
+    const paths = this.app.vault.getMarkdownFiles()
+      .filter((file) => file.path.startsWith(`${folderPath}/`))
+      .map((file) => file.path.slice(folderPath.length + 1))
+      .sort();
+    if (!this.app.vault.getAbstractFileByPath(folderPath)) {
+      new Notice(`Folder not found: ${folderPath}`);
+      return;
+    }
+    new FolderPublishPreviewModal(this.app, { ...choice, folderPath }, paths, (accepted) => {
+      if (!accepted) return;
+      void this.publishFolderChoice({ ...choice, folderPath });
+    }).open();
+  }
+
+  private async publishFolderChoice(choice: FolderShareChoice): Promise<void> {
+    const settings = { ...this.settings };
+    const progress = new FolderProgressModal(this.app, 'Publishing folder');
+    progress.open();
+    const previousState = this.settings.folderShares.find(
+      (state) => state.folderPath === choice.folderPath && this.folderShareUsesCurrentServer(state),
+    );
+    try {
+      const result = await publishFolder(this.app, new ApiClient(settings), {
+        folderPath: choice.folderPath,
+        serverUrl: settings.serverUrl,
+        ownerUid: settings.uid,
+        accessMode: choice.accessMode,
+        // Watched folders are durable by default. Per-note sharing still offers
+        // expiring links, but an expiring index cannot support subscriptions.
+        expiresIn: undefined,
+        previousState,
+        saveState: (state) => this.saveFolderShareState(state),
+        shouldContinue: () => progress.shouldContinue && this.settings.serverUrl === settings.serverUrl && this.settings.uid === settings.uid,
+        canPublishEditable: (file) => getShareSyncStatus(file.path) === 'connected',
+        onProgress: ({ phase, completed, total, path }) => progress.update(
+          phase === 'manifest'
+            ? 'Publishing encrypted folder index…'
+            : `Publishing ${completed + 1}/${total}${path ? `: ${path}` : ''}`,
+        ),
+      });
+      if (result.cancelled) {
+        progress.finish('Stopped safely. Run Share folder again to resume.');
+      } else if (result.failed.length) {
+        progress.finish(`${result.failed.length} file${result.failed.length === 1 ? '' : 's'} need attention. Run again to retry.`);
+        new Notice(result.failed.map((failure) => `${failure.path}: ${failure.message}`).join('\n'), 12_000);
+      } else if (result.shareUrl) {
+        await navigator.clipboard.writeText(result.shareUrl);
+        progress.finish(`Published ${result.created + result.updated + result.unchanged} notes. Folder link copied.`);
+        const active = this.app.workspace.getActiveFile();
+        if (active?.path.startsWith(`${choice.folderPath}/`) && choice.accessMode === 'public_edit') {
+          await this.autoConnectShareSync();
+        }
+      }
+    } catch (error) {
+      progress.finish('Folder publishing failed.');
+      new Notice(`Failed to share folder: ${requestErrorMessage(error) || String(error)}`);
+    }
+  }
+
+  private async previewAndImportFolder(manifestUrl: string): Promise<void> {
+    try {
+      const loaded = await loadFolderShare(this.app, this.api, manifestUrl, {
+        settings: this.settings,
+        saveSettings: () => this.saveSettings(),
+      });
+      if (!loaded) return;
+      new FolderImportPreviewModal(this.app, loaded.manifest, (accepted) => {
+        if (accepted) void this.importLoadedFolder(loaded);
+      }).open();
+    } catch (error) {
+      new Notice(`Could not preview shared folder: ${requestErrorMessage(error) || String(error)}`);
+    }
+  }
+
+  private async importLoadedFolder(loaded: LoadedFolderShare, targetRoot?: string): Promise<void> {
+    const progress = new FolderProgressModal(this.app, 'Importing shared folder');
+    progress.open();
+    let result: Awaited<ReturnType<typeof importFolderShare>>;
+    try {
+      result = await importFolderShare(this.app, loaded, {
+        settings: this.settings,
+        saveSettings: () => this.saveSettings(),
+        targetRoot,
+        shouldContinue: () => progress.shouldContinue,
+        onProgress: (completed, total, path) => progress.update(
+          `Importing ${Math.min(completed + 1, total)}/${total}${path ? `: ${path}` : ''}`,
+        ),
+      });
+    } catch (error) {
+      progress.finish('Folder import failed.');
+      new Notice(`Failed to import shared folder: ${requestErrorMessage(error) || String(error)}`);
+      return;
+    }
+    progress.finish(result.cancelled
+      ? 'Stopped safely. Import the same folder link to resume.'
+      : `Imported ${result.imported}, skipped ${result.skipped}${result.failed.length ? `, ${result.failed.length} failed` : ''}.`);
+    if (result.cancelled) return;
+    new FolderSubscriptionPromptModal(this.app, loaded.manifest.name, (subscribe) => {
+      if (subscribe) void this.subscribeFolder(loaded, result.rootPath, result.completedPaths);
+    }).open();
+  }
+
+  private async subscribeFolder(loaded: LoadedFolderShare, rootPath: string, completedPaths: string[]): Promise<void> {
+    const completed = new Set(completedPaths);
+    const subscription: FolderSubscription = {
+      manifestUrl: loaded.manifestUrl,
+      rootPath,
+      knownEntries: Object.fromEntries(
+        loaded.manifest.entries.filter((entry) => completed.has(entry.path)).map((entry) => [entry.path, entry.shareUrl]),
+      ),
+      subscribedAt: new Date().toISOString(),
+      lastCheckedAt: new Date().toISOString(),
+    };
+    const origin = new URL(loaded.manifestUrl).origin;
+    const configuredOrigin = new URL(this.settings.serverUrl).origin;
+    if (origin !== configuredOrigin
+      && !isOfficialServerAlias(origin, configuredOrigin)
+      && !this.settings.trustedShareHosts.includes(origin)) {
+      // Choosing ongoing checks is explicit permission to contact this exact
+      // foreign origin again. withBaseUrl still strips home-server credentials.
+      this.settings.trustedShareHosts.push(origin);
+    }
+    const existing = this.settings.folderSubscriptions.findIndex((item) => item.manifestUrl === loaded.manifestUrl);
+    if (existing >= 0) this.settings.folderSubscriptions[existing] = subscription;
+    else this.settings.folderSubscriptions.push(subscription);
+    await this.saveSettings();
+    new Notice('Watching this encrypted folder index. New notes will always require approval.');
+  }
+
+  private async unsubscribeFolder(manifestUrl: string): Promise<void> {
+    this.settings.folderSubscriptions = this.settings.folderSubscriptions
+      .filter((subscription) => subscription.manifestUrl !== manifestUrl);
+    this.pendingFolderSubscriptionPrompts.delete(manifestUrl);
+    await this.saveSettings();
+  }
+
+  private async checkFolderSubscriptions(): Promise<void> {
+    if (this.checkingFolderSubscriptions) return;
+    this.checkingFolderSubscriptions = true;
+    try {
+      for (const subscription of [...this.settings.folderSubscriptions]) {
+        if (this.pendingFolderSubscriptionPrompts.has(subscription.manifestUrl)) continue;
+        try {
+          const loaded = await loadFolderShare(this.app, this.api, subscription.manifestUrl, {
+            settings: this.settings,
+            saveSettings: () => this.saveSettings(),
+          });
+          if (!loaded) continue;
+          subscription.lastCheckedAt = new Date().toISOString();
+          const additions = loaded.manifest.entries.filter(
+            (entry) => subscription.knownEntries[entry.path] !== entry.shareUrl,
+          );
+          if (!additions.length) {
+            await this.saveSettings();
+            continue;
+          }
+          this.pendingFolderSubscriptionPrompts.add(subscription.manifestUrl);
+          new FolderUpdatePreviewModal(
+            this.app,
+            loaded.manifest.name,
+            additions.map((entry) => entry.path),
+            (decision) => { void (async () => {
+              try {
+                if (decision === 'unsubscribe') {
+                  await this.unsubscribeFolder(subscription.manifestUrl);
+                  return;
+                }
+                if (decision !== 'import') return;
+                const additionsOnly: LoadedFolderShare = {
+                  ...loaded,
+                  manifest: { ...loaded.manifest, entries: additions },
+                };
+                const progress = new FolderProgressModal(this.app, 'Importing new shared notes');
+                progress.open();
+                try {
+                  const result = await importFolderShare(this.app, additionsOnly, {
+                    settings: this.settings,
+                    targetRoot: subscription.rootPath,
+                    shouldContinue: () => progress.shouldContinue,
+                    onProgress: (completed, total, path) => progress.update(
+                      `Importing ${Math.min(completed + 1, total)}/${total}${path ? `: ${path}` : ''}`,
+                    ),
+                  });
+                  const completed = new Set(result.completedPaths);
+                  for (const entry of additions) {
+                    if (completed.has(entry.path)) subscription.knownEntries[entry.path] = entry.shareUrl;
+                  }
+                  await this.saveSettings();
+                  progress.finish(result.cancelled ? 'Stopped safely.' : `Imported ${result.imported} new notes.`);
+                } catch (error) {
+                  progress.finish('New-note import failed. It will remain available for retry.');
+                  new Notice(`Failed to import folder update: ${requestErrorMessage(error) || String(error)}`);
+                }
+              } finally {
+                this.pendingFolderSubscriptionPrompts.delete(subscription.manifestUrl);
+              }
+            })(); },
+          ).open();
+        } catch (error) {
+          console.warn(`NoteColab: folder subscription check failed for ${subscription.manifestUrl}`, error);
+        }
+      }
+    } finally {
+      this.checkingFolderSubscriptions = false;
+    }
+  }
+
   async shareCurrentNote(): Promise<void> {
     if (!this.settings.apiKey) {
       const connected = await this.ensureAutomaticConnection();
@@ -813,9 +1165,10 @@ export default class ColabPlugin extends Plugin {
       showControls: false,
       showChrome: false,
       collaborators: [],
-    }, this.settings.contacts, (opts) => { void (async () => {
+    }, this.settings.contacts, async (opts) => {
       const result = await shareNote(this.app, this.api, this.settings, file, {
         accessMode: opts.accessMode,
+        updateMode: opts.updateMode,
         expiresIn: opts.accessMode === 'invited_edit' ? undefined : (opts.expiresIn || undefined),
         showHelp: opts.showHelp,
         theme: opts.theme,
@@ -824,13 +1177,23 @@ export default class ColabPlugin extends Plugin {
         showChrome: opts.showChrome,
         collaborators: opts.collaborators,
       });
+
+      if (!result) {
+        return { ok: false, error: 'The share could not be created. Your choices are unchanged, so you can try again.' };
+      }
+
       // Auto-start sync for editable shares
-      if (result && opts.accessMode !== 'read_only') {
-        const key = result.shareUrl.split('#')[1] || '';
-        await startShareSync(this.app, this.settings, file, result.shareId, this.api, key);
+      if (opts.accessMode !== 'read_only') {
+        try {
+          const key = result.shareUrl.split('#')[1] || '';
+          await startShareSync(this.app, this.settings, file, result.shareId, this.api, key);
+        } catch (error) {
+          console.warn('NoteColab: share created but live sync could not start', error);
+          new Notice('Share created, but live sync could not start yet. Reopen the note to retry.');
+        }
       }
       // Upload vault key for web dashboard access
-      if (result && this.settings.vaultKey) {
+      if (this.settings.vaultKey) {
         try {
           const { encryptWithVaultKey } = await import('./crypto/crypto');
           const noteKey = result.shareUrl.split('#')[1] || '';
@@ -843,7 +1206,7 @@ export default class ColabPlugin extends Plugin {
         }
       }
       // After uploading content + images, check whether storage is full.
-      if (result) {
+      try {
         this.settings.sharedNoteCount += 1;
         this.settings.onboardingState = 'done';
         await this.saveSettings();
@@ -851,18 +1214,33 @@ export default class ColabPlugin extends Plugin {
         if (this.settings.usernamePromptState === 'after_shares' && this.settings.sharedNoteCount >= 3) {
           void this.maybePromptForUsername('after_shares');
         }
+      } catch (error) {
+        console.warn('NoteColab: share created but local share counters could not be saved', error);
       }
       // For invite-only: generate an invite link and copy it
-      if (result && opts.accessMode === 'invited_edit') {
-        const inviteResult = await this.api.createInviteLink(result.shareId);
-        if (inviteResult?.token) {
-          const encKey = result.shareUrl.split('#')[1] || '';
-          const inviteUrl = `${this.settings.serverUrl}/invite/${inviteResult.token}#${encKey}`;
-          await navigator.clipboard.writeText(inviteUrl);
-          new Notice('Invite link copied to clipboard!\nShare it with anyone you want to invite.');
+      if (opts.accessMode === 'invited_edit') {
+        try {
+          const inviteResult = await this.api.createInviteLink(result.shareId);
+          if (!inviteResult?.token) {
+            new Notice('Share created, but the invite link could not be created. Open Manage shared links to try again.');
+          } else {
+            const encKey = result.shareUrl.split('#')[1] || '';
+            const inviteUrl = `${this.settings.serverUrl}/invite/${inviteResult.token}#${encKey}`;
+            try {
+              await navigator.clipboard.writeText(inviteUrl);
+              new Notice('Invite link copied to clipboard!\nShare it with anyone you want to invite.');
+            } catch (error) {
+              console.warn('NoteColab: invite link created but clipboard write failed', error);
+              new Notice('Invite link created, but clipboard access failed. Open Manage shared links to create and copy another invite.');
+            }
+          }
+        } catch (error) {
+          console.warn('NoteColab: share created but invite link creation failed', error);
+          new Notice('Share created, but the invite link could not be created. Open Manage shared links to try again.');
         }
       }
-    })(); }, firstShare).open();
+      return { ok: true };
+    }, firstShare, file).open();
   }
 
   private openManageLinks(file: TFile): void {
@@ -926,6 +1304,9 @@ export default class ColabPlugin extends Plugin {
     if (this.pendingSharesInterval) window.clearInterval(this.pendingSharesInterval);
     if (this.readOnlyRefreshInterval) window.clearInterval(this.readOnlyRefreshInterval);
     if (this.refCheckTimer) window.clearTimeout(this.refCheckTimer);
+    if (this.folderSubscriptionInterval) window.clearInterval(this.folderSubscriptionInterval);
+    this.folderShareSync?.stop();
+    this.folderShareSync = null;
     for (const timer of this.pendingDeletions.values()) window.clearTimeout(timer);
     this.pendingDeletions.clear();
     destroyAllShareSyncs(this.app);
@@ -935,6 +1316,8 @@ export default class ColabPlugin extends Plugin {
     const saved = await this.loadData() as Partial<ColabSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.settings.pinnedPublicKeys = { ...(saved?.pinnedPublicKeys || {}) };
+    this.settings.folderShares = [...(saved?.folderShares || [])];
+    this.settings.folderSubscriptions = [...(saved?.folderSubscriptions || [])];
     this.settings.usernamePromptState = initialUsernamePromptState(saved);
     this.settings.onboardingState = initialOnboardingState(saved);
     if (saved?.serverUrl && migrateOfficialServerUrl(saved.serverUrl) !== saved.serverUrl) {
@@ -981,22 +1364,24 @@ export default class ColabPlugin extends Plugin {
 
   private async maybeStartOnboarding(): Promise<void> {
     if (this.onboardingOpen || this.settings.onboardingState !== 'pending') return;
-    if (!await this.ensureAutomaticConnection()) {
-      new Notice(this.automaticConnectionError
-        || 'Note Colab could not connect automatically. You can retry from Settings → Note Colab.');
-      return;
-    }
-
     this.onboardingOpen = true;
     new OnboardingModal(this.app, {
       serverUrl: this.settings.serverUrl,
+      connected: !!this.settings.apiKey,
+      onConnect: async () => {
+        const connected = await this.ensureAutomaticConnection();
+        return connected ? { ok: true } : {
+          ok: false,
+          error: this.automaticConnectionError || 'Open Settings → Note Colab to connect to this server.',
+        };
+      },
       onShare: () => {
         this.onboardingOpen = false;
         void this.shareCurrentNote();
       },
-      onDone: async () => {
+      onDone: async (completed) => {
         this.onboardingOpen = false;
-        this.settings.onboardingState = 'done';
+        if (completed) this.settings.onboardingState = 'done';
         await this.saveSettings();
       },
     }).open();
@@ -1129,6 +1514,7 @@ export default class ColabPlugin extends Plugin {
     if (getShareSync(file.path)) return;
     const fm = noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
     if (!fm?.colab_share_id || fm.colab_access !== 'read_only' || !mayPublishAsOwner(fm)) return;
+    if (fm.colab_update_mode === 'snapshot') return;
     // Skip if the link is locally known to be expired.
     if (fm.colab_expires && new Date(fm.colab_expires) < new Date()) return;
     const encKey = fm.colab_encryption_key ||
@@ -1209,15 +1595,21 @@ export default class ColabPlugin extends Plugin {
     }
 
     const status = getShareSyncStatus(file.path);
+    const saveState = getShareSaveState(file.path);
+    const saveLabels = { 'saved-device': 'saved on device', uploading: 'saving…', 'saved-server': 'saved to server', offline: 'offline, changes pending', error: 'save failed, changes pending' } as const;
     if (this.isReadOnlyMirror(file)) {
       this.statusBarItem.setText(
         this.refreshingReadOnlyMirrors.has(file.path)
           ? 'Colab: read-only · updating…'
-          : 'Colab: read-only · synced',
+          : 'Colab: read-only',
       );
       this.statusBarItem.setCssStyles({ color: '' });
-    } else if (status === 'connected') {
-      this.statusBarItem.setText('Colab: syncing');
+    } else if (status === 'connected'
+      || saveState === 'saved-device'
+      || saveState === 'uploading'
+      || saveState === 'offline'
+      || saveState === 'error') {
+      this.statusBarItem.setText(`Colab: ${saveLabels[saveState || 'uploading']}`);
       this.statusBarItem.setCssStyles({ color: '' });
     } else if (status === 'connecting') {
       this.statusBarItem.setText('Colab: connecting…');

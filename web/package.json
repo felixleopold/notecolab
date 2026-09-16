@@ -1,0 +1,57 @@
+{
+  "name": "notecolab-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "generate": "nuxt generate",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "nuxt prepare && vue-tsc -b --noEmit",
+    "test:editor": "playwright test e2e/collaboration.spec.mjs e2e/presence.spec.mjs --workers=1"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "^6.3.1",
+    "@codemirror/language-data": "^6.5.1",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.34.0",
+    "@lezer/highlight": "^1.2.3",
+    "@traptitech/markdown-it-katex": "^3.6.0",
+    "codemirror": "^6.0.1",
+    "dompurify": "^3.4.13",
+    "katex": "^0.16.40",
+    "lib0": "^0.2.98",
+    "markdown-it": "^14.3.0",
+    "markdown-it-mark": "^4.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "nuxt": "^4.5.2",
+    "shiki": "^4.2.0",
+    "vue": "^3.5.0",
+    "y-codemirror.next": "^0.3.5",
+    "y-protocols": "^1.0.6",
+    "y-webrtc": "^10.3.0",
+    "y-websocket": "^2.0.4",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@nuxtjs/tailwindcss": "^6.12.0",
+    "@playwright/test": "^1.63.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "@resvg/resvg-wasm": "^2.6.2",
+    "@types/markdown-it": "^14.1.2",
+    "esbuild": "^0.27.4",
+    "nuxt-og-image": "^6.6.0",
+    "satori": "^0.26.0",
+    "tailwindcss": "^3.4.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.7.0",
+    "vue-tsc": "^2.2.0"
+  },
+  "overrides": {
+    "y-websocket": {
+      "ws": "^8.21.0"
+    }
+  }
+}

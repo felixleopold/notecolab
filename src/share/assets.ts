@@ -36,12 +36,41 @@ export async function downloadMissingAssets(
   contextPath: string,
   shouldContinue: () => boolean = () => true,
 ): Promise<number> {
-  if (!shouldContinue()) return 0;
+  return (await downloadMissingAssetsWithResult(
+    app,
+    api,
+    shareId,
+    encryptionKey,
+    imageNames,
+    targetFolder,
+    contextPath,
+    shouldContinue,
+  )).saved;
+}
+
+export interface AssetDownloadResult {
+  saved: number;
+  failed: number;
+  cancelled: boolean;
+}
+
+/** Detailed variant for resumable workflows. The number-returning API remains compatible. */
+export async function downloadMissingAssetsWithResult(
+  app: App,
+  api: ApiClient,
+  shareId: string,
+  encryptionKey: string,
+  imageNames: string[],
+  targetFolder: string,
+  contextPath: string,
+  shouldContinue: () => boolean = () => true,
+): Promise<AssetDownloadResult> {
+  if (!shouldContinue()) return { saved: 0, failed: 0, cancelled: true };
   // Only fetch assets we don't already have somewhere in the vault.
   const missing = imageNames.filter(
     (name) => !app.metadataCache.getFirstLinkpathDest(name, contextPath)
   );
-  if (missing.length === 0) return 0;
+  if (missing.length === 0) return { saved: 0, failed: 0, cancelled: false };
 
   const notice = new Notice('', 0);
   const render = (done: number) =>
@@ -104,12 +133,12 @@ export async function downloadMissingAssets(
   }
 
   notice.hide();
-  if (aborted) return saved;
+  if (aborted) return { saved, failed, cancelled: true };
   const noun = (n: number) => `${n} asset${n === 1 ? '' : 's'}`;
   new Notice(
     failed > 0
       ? `NoteColab: downloaded ${noun(saved)}, ${failed} failed`
       : `NoteColab: downloaded ${noun(saved)}`
   );
-  return saved;
+  return { saved, failed, cancelled: false };
 }

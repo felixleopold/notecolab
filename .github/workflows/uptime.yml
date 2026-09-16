@@ -1,0 +1,33 @@
+name: Service checks
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
+permissions:
+  contents: write
+concurrency:
+  group: service-check-history
+  cancel-in-progress: false
+jobs:
+  check:
+    if: github.repository == 'felixleopold/notecolab'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Probe public service and record observations
+        env:
+          STATUS_ORIGIN: https://notecolab.com
+        run: python3 .github/scripts/check-status.py "$RUNNER_TEMP/history.json"
+      - name: Publish bounded observation history
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          if git fetch origin status; then
+            git switch --detach FETCH_HEAD
+          else
+            git switch --orphan status
+          fi
+          cp "$RUNNER_TEMP/history.json" history.json
+          git add history.json
+          git commit -m 'Record public service check'
+          git push origin HEAD:refs/heads/status

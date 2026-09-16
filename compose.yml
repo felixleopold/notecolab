@@ -1,0 +1,40 @@
+services:
+  api:
+    build: ./api
+    restart: unless-stopped
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/notecolab.db
+      NODE_ENV: production
+    volumes:
+      - ${NOTECOLAB_DATA_PATH:-./data}:/app/data
+    command: ["sh", "-c", "umask 077 && exec node dist/index.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/v1/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    environment:
+      NUXT_PUBLIC_API_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env}
+      NODE_ENV: production
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_HOST: ${SITE_HOST:?Set SITE_HOST in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data:
+  caddy_config:

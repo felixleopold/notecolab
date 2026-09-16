@@ -36,22 +36,25 @@ jobs:
         id: version
         run: echo "value=$(jq -r .version manifest.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Check release does not already exist
+      - name: Check whether this version is already released
+        id: existing
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release already exists: $VERSION"
-            exit 1
+            echo "released=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Attest release build
+        if: steps.existing.outputs.released != 'true'
         uses: actions/attest@v4
         with:
           subject-path: main.js
 
       - name: Create release
+        if: steps.existing.outputs.released != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.value }}

@@ -1,0 +1,36 @@
+name: Check source
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ['.', api, web]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Typecheck
+        run: |
+          if [ -f nuxt.config.ts ]; then npm run typecheck; else npx tsc --noEmit; fi
+      - name: Install browser for collaboration checks
+        if: matrix.package == 'web'
+        run: npx playwright install --with-deps chromium
+      - name: Check browser collaboration
+        if: matrix.package == 'web'
+        run: npm run test:editor
+      - run: npm run build

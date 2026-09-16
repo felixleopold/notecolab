@@ -9,6 +9,7 @@
   }
 
   export let accessMode: 'public_edit' | 'invited_edit' | 'read_only' = 'read_only';
+  export let updateMode: 'snapshot' | 'live' = 'live';
   export let expiresIn = 86400;
   export let showHelp = false;
   export let theme: 'auto' | 'light' | 'dark' = 'auto';
@@ -18,6 +19,7 @@
   export let contacts: Contact[] = [];
   export let collaborators: string[] = [];
   export let submitting = false;
+  export let submitError = '';
   export let simple = false;
 
   let collabInput = '';
@@ -40,8 +42,10 @@
   }
 
   function handleSubmit() {
+    if (submitting) return;
     dispatch('share', {
       accessMode,
+      updateMode,
       expiresIn,
       showHelp,
       theme,
@@ -115,6 +119,16 @@
   </div>
 
   <!-- Direct Obsidian delivery -->
+  {#if accessMode === 'read_only'}
+    <div class="share-field">
+      <label class="share-label" for="notecolab-update-mode">What should readers receive?</label>
+      <select id="notecolab-update-mode" bind:value={updateMode}>
+        <option value="live">An updating note, including my later edits</option>
+        <option value="snapshot">A snapshot of this version</option>
+      </select>
+      <p class="share-hint">{updateMode === 'snapshot' ? 'Later local edits stay private. Revoke this share and publish again to replace the snapshot.' : 'Later edits are automatically published. Anyone with the link can read and copy them.'}</p>
+    </div>
+  {/if}
   {#if showAdvanced}
   <div class="share-field">
       <span class="share-label">Send directly to Obsidian (optional)</span>
@@ -232,6 +246,9 @@
   {/if}
 
   <!-- Submit -->
+  {#if submitError}
+    <p class="share-submit-error" role="alert">{submitError}</p>
+  {/if}
   <div class="share-footer">
     <button class="share-btn-primary" on:click={handleSubmit} disabled={submitting}>
       {#if submitting}
@@ -296,6 +313,12 @@
     font-size: var(--font-ui-smaller);
     color: var(--text-muted);
     margin: 0 0 8px;
+  }
+
+  .share-submit-error {
+    margin: 0 0 10px;
+    color: var(--text-error);
+    font-size: var(--font-ui-smaller);
   }
 
   /* Access mode cards */
