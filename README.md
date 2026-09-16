@@ -227,6 +227,9 @@ To run the API, web reader, and relay yourself, use the
 [protocol](docs/PROTOCOL.md) and [security model](SECURITY-CONSIDERATIONS.md)
 explain interoperability and the limits of client encryption.
 
+For a comparison with Relay, Share Note, LiveSync, and Remotely Save, see
+[choosing sharing or vault sync](docs/COMPARISON.md).
+
 ## Development
 
 Use a separate test vault. This package uses Node.js 22 and npm.

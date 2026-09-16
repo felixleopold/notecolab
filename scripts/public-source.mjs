@@ -12,7 +12,7 @@ export function publicSourcePath(path) {
     return path;
   }
   if (['.env.example', 'SECURITY-CONSIDERATIONS.md', 'SECURITY.md', 'LICENSE',
-    'docs/PROTOCOL.md', 'docs/SELF-HOSTING.md', 'docs/HOSTING-POLICY.md', 'docs/DEVELOPMENT.md',
+    'docs/PROTOCOL.md', 'docs/COMPARISON.md', 'docs/SELF-HOSTING.md', 'docs/HOSTING-POLICY.md', 'docs/DEVELOPMENT.md',
     'scripts/check-permissions.sh', 'scripts/smoke-test.sh'].includes(path)) return path;
   if (path.startsWith('docs/images/')) return path;
   if (path === 'deploy/public-compose.yml') return 'compose.yml';
