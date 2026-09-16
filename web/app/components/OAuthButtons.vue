@@ -10,7 +10,7 @@
       {{ activeProvider === provider.id ? `Opening ${provider.name}…` : `Continue with ${provider.name}` }}
     </button>
     <p v-if="registrationMode === 'closed'" class="text-xs" style="color: #777;">Provider sign-in works for linked accounts. This server does not allow new self-registered accounts.</p>
-    <p class="text-xs leading-relaxed" style="color: #777;">Provider sign-in opens the dashboard but does not unlock encrypted note keys, recover a plugin credential, or rotate a device identity key. Use your existing Note Colab password when prompted.</p>
+    <p class="text-xs leading-relaxed" style="color: #777;">Sign in to your account. Opening encrypted notes still requires your Note Colab password.</p>
   </div>
   <p v-else-if="showUnavailable" class="text-xs text-center" style="color: #777;">Google and GitHub sign-in are not configured on this server.</p>
 </template>
@@ -20,7 +20,7 @@ import { beginOAuth, discoverOAuth, type OAuthProvider } from '~/utils/oauth'
 
 const props = withDefaults(defineProps<{ returnTo?: string; showUnavailable?: boolean }>(), {
   returnTo: '/dashboard',
-  showUnavailable: true,
+  showUnavailable: false,
 })
 const emit = defineEmits<{ error: [message: string] }>()
 const providers = ref<OAuthProvider[]>([])
