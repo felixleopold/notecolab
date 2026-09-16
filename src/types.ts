@@ -1,6 +1,16 @@
+import type { FolderShareState } from './share/folderShare';
+
 export interface Contact {
   uid: string;
   name: string;
+}
+
+export interface FolderSubscription {
+  manifestUrl: string;
+  rootPath: string;
+  knownEntries: Record<string, string>;
+  subscribedAt: string;
+  lastCheckedAt?: string;
 }
 
 export interface ColabSettings {
@@ -30,6 +40,8 @@ export interface ColabSettings {
   trustedShareHosts: string[];
   // Server-origin + UID scoped X25519 directory keys, pinned on first use.
   pinnedPublicKeys: Record<string, string>;
+  folderShares: FolderShareState[];
+  folderSubscriptions: FolderSubscription[];
 }
 
 export const OFFICIAL_SERVER_URL = 'https://notecolab.com';
@@ -78,6 +90,8 @@ export const DEFAULT_SETTINGS: ColabSettings = {
   vaultKey: '',
   trustedShareHosts: [],
   pinnedPublicKeys: {},
+  folderShares: [],
+  folderSubscriptions: [],
 };
 
 export interface ShareResult {
@@ -98,6 +112,8 @@ export interface NoteContent {
   title: string | null;
   encryptedTitle: string | null;
   encryptedContent: string;
+  encryptedCrdt?: string | null;
+  contentVersion?: number;
   ownerUid?: string;
   accessMode: string;
   canEdit: boolean;

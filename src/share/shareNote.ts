@@ -62,6 +62,7 @@ export async function shareNote(
   file: TFile,
   options: {
     accessMode: 'public_edit' | 'invited_edit' | 'read_only';
+    updateMode?: 'snapshot' | 'live';
     expiresIn?: number;
     showHelp?: boolean;
     collaborators?: string[];
@@ -71,6 +72,7 @@ export async function shareNote(
     showChrome?: boolean;
   }
 ): Promise<ShareResult | null> {
+  let createdShare: ShareResult | null = null;
   try {
     const content = await app.vault.read(file);
     const { frontmatter, body } = parseFrontmatter(content);
@@ -166,15 +168,18 @@ export async function shareNote(
       fm.colab_access = options.accessMode;
       fm.colab_encryption_key = encryptionKey;
       fm.colab_owner = true;
+      fm.colab_update_mode = options.accessMode === 'read_only' ? (options.updateMode || 'live') : 'live';
       if (result.expiresAt) {
         fm.colab_expires = result.expiresAt;
       }
     });
 
+    createdShare = { shareId: result.shareId, shareUrl, expiresAt: result.expiresAt };
+
     // Copy to clipboard (skip for invited_edit — invite link is copied separately)
     if (options.accessMode !== 'invited_edit') {
       await navigator.clipboard.writeText(shareUrl);
-      new Notice(`Share link copied to clipboard!\n${shareUrl}`);
+      new Notice('Share link copied to clipboard!');
     }
 
     if (pendingShares.length > 0) {
@@ -197,6 +202,10 @@ export async function shareNote(
       expiresAt: result.expiresAt,
     };
   } catch (e) {
+    if (createdShare) {
+      new Notice('Share created, but copying or direct delivery failed. Use Manage shared links to copy or resend it.');
+      return createdShare;
+    }
     // The server rejects with 413 either when a single note exceeds the payload
     // cap or when the upload would push the account over its storage quota.
     // Prefer the server's message (it explains which, and offers an upgrade).
@@ -241,6 +250,7 @@ export async function revokeShare(
       delete fm.colab_link_id;
       delete fm.colab_link;
       delete fm.colab_access;
+      delete fm.colab_update_mode;
       delete fm.colab_encryption_key;
       delete fm.colab_owner;
       delete fm.colab_expires;

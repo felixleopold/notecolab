@@ -9,6 +9,18 @@ function responseJson<T>(response: RequestUrlResponse): T {
   return response.json as T;
 }
 
+export type SnapshotUpdateResult =
+  | { ok: true; contentVersion: number }
+  | {
+      ok: false;
+      status?: number;
+      conflict?: {
+        contentVersion: number;
+        encryptedContent: string | null;
+        encryptedCrdt: string | null;
+      };
+    };
+
 export class ApiClient {
   /**
    * Per-instance base URL override. When set, requests go here instead of
@@ -157,6 +169,64 @@ export class ApiClient {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Persist a matched encrypted Markdown/Yjs checkpoint. `baseVersion` makes
+   * stale writers fail with a mergeable 409 instead of replacing newer work.
+   */
+  async updateSnapshot(shareId: string, data: {
+    encryptedContent: string;
+    encryptedCrdt: string;
+    baseVersion: number;
+  }): Promise<SnapshotUpdateResult> {
+    try {
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}`,
+        method: 'PATCH',
+        headers: this.headers,
+        body: JSON.stringify(data),
+      });
+      const json = responseJson<{ contentVersion: number }>(res);
+      return { ok: true, contentVersion: json.contentVersion };
+    } catch (error: unknown) {
+      const status = requestErrorStatus(error);
+      if (status === 409 && typeof error === 'object' && error !== null && 'json' in error) {
+        const json = error.json as {
+          code?: string;
+          current?: {
+            contentVersion: number;
+            encryptedContent: string | null;
+            encryptedCrdt: string | null;
+          };
+        };
+        if (json.code === 'snapshot_conflict' && json.current) {
+          return { ok: false, status, conflict: json.current };
+        }
+      }
+      return { ok: false, status };
+    }
+  }
+
+  async getNoteHistory(shareId: string): Promise<{
+    currentVersion: number;
+    revisions: {
+      contentVersion: number;
+      encryptedContent: string | null;
+      encryptedCrdt: string | null;
+      createdAt: string;
+    }[];
+  } | null> {
+    try {
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/history`,
+        method: 'GET',
+        headers: this.headers,
+      });
+      return responseJson(res);
+    } catch {
+      return null;
     }
   }
 
@@ -444,7 +514,7 @@ export class ApiClient {
     checkoutAvailable: boolean;
     proPrice: string;
     upgradePlanId?: string | null;
-    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean }>;
+    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean; collaboratorLimit?: number }>;
     registration?: { mode: 'open' | 'invite' | 'closed'; inviteRequired: boolean };
   } | null> {
     try {
@@ -465,11 +535,12 @@ export class ApiClient {
     checkoutAvailable: boolean;
     proPrice: string;
     upgradePlanId?: string | null;
-    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean }>;
+    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean; collaboratorLimit?: number }>;
     plan?: string;
     planExpiresAt?: string | null;
     recoveryConfigured?: boolean;
     storage?: { usedBytes: number; limitBytes: number; unlimited: boolean; usagePercent: number };
+    collaborators?: { limit: number; used: number; requested?: number; ok?: boolean; plan?: string };
   } | null> {
     try {
       const res = await requestUrl({

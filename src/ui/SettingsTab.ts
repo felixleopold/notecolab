@@ -11,6 +11,12 @@ import {
 } from '../crypto/identityTrust';
 import { noteColabFrontmatter } from '../share/frontmatter';
 import { requestErrorMessage, requestErrorStatus } from '../api/errors';
+import {
+  linkOAuthProvider,
+  linkedOAuthProviders,
+  oauthProviders,
+  unlinkOAuthProvider,
+} from '../auth/oauth';
 
 /**
  * Only open http(s) checkout URLs. The URL is returned by the (user-configured,
@@ -171,7 +177,17 @@ export class ColabSettingsTab extends PluginSettingTab {
       cls: 'setting-item-description',
     });
 
-    new Setting(containerEl)
+    new Setting(containerEl).setName('Account').setHeading();
+    const accountCard = containerEl.createDiv();
+    accountCard.setCssStyles({
+      background: 'var(--background-secondary)',
+      border: '1px solid var(--background-modifier-border)',
+      borderRadius: 'var(--radius-m)',
+      padding: '0 var(--size-4-3)',
+      marginBottom: 'var(--size-4-5)',
+    });
+
+    new Setting(accountCard)
       .setName('API Key')
       .setDesc('Your authentication key (auto-generated on connect)')
       .addText((text) => {
@@ -180,7 +196,7 @@ export class ColabSettingsTab extends PluginSettingTab {
           .setDisabled(true);
       });
 
-    const uidSetting = new Setting(containerEl)
+    const uidSetting = new Setting(accountCard)
       .setName('User ID')
       .setDesc('Your unique identifier — share this with collaborators so they can add you as an invited editor')
       .addText((text) => {
@@ -204,7 +220,7 @@ export class ColabSettingsTab extends PluginSettingTab {
       } catch {
         // Keep settings usable so account recovery remains available.
       }
-      new Setting(containerEl)
+      new Setting(accountCard)
         .setName('Identity fingerprint')
         .setDesc('Compare this with collaborators through another channel before they reset a changed key pin.')
         .addText((text) => text.setValue(fingerprint).setDisabled(true))
@@ -214,8 +230,11 @@ export class ColabSettingsTab extends PluginSettingTab {
         }));
     }
 
+    const signInMethods = accountCard.createDiv();
+    void this.renderSignInMethods(signInMethods);
+
     let pendingUsername = this.plugin.settings.username;
-    new Setting(containerEl)
+    new Setting(accountCard)
       .setName('Public username')
       .setDesc('Shown when someone adds your User ID and in the server admin dashboard. Contacts can replace it with a private alias.')
       .addText((text) => text
@@ -453,6 +472,72 @@ export class ColabSettingsTab extends PluginSettingTab {
       });
   }
 
+  private async renderSignInMethods(container: HTMLElement): Promise<void> {
+    container.empty();
+    new Setting(container).setName('Sign-in methods').setHeading();
+    if (!this.plugin.settings.apiKey) {
+      container.createEl('p', {
+        text: 'Connect this plugin before linking a sign-in provider.',
+        cls: 'setting-item-description',
+      });
+      return;
+    }
+
+    const loading = container.createEl('p', { text: 'Checking available providers…', cls: 'setting-item-description' });
+    try {
+      const [providers, linked] = await Promise.all([
+        oauthProviders(this.plugin.settings.serverUrl),
+        linkedOAuthProviders(this.plugin.settings.serverUrl, this.plugin.settings.apiKey),
+      ]);
+      loading.remove();
+      if (!providers.length) {
+        container.createEl('p', {
+          text: 'Use your User ID and password to sign in on this server.',
+          cls: 'setting-item-description',
+        });
+        return;
+      }
+      container.createEl('p', {
+        text: 'Link a provider to sign in to the web dashboard. This does not replace this plugin credential or its encryption key, and it does not unlock encrypted vault keys without your existing password.',
+        cls: 'setting-item-description',
+      });
+      for (const provider of providers) {
+        const isLinked = linked.includes(provider.id);
+        const setting = new Setting(container)
+          .setName(provider.name)
+          .setDesc(isLinked ? 'Linked to this Note Colab account' : 'Not linked');
+        if (isLinked) {
+          setting.addButton((button) => button.setButtonText('Unlink').setWarning().onClick(async () => {
+            const confirmed = await this.confirmAction(
+              `Unlink ${provider.name}?`,
+              `This removes ${provider.name} as a web sign-in method. It does not delete your Note Colab account, notes, or this plugin credential.`,
+              'Unlink',
+            );
+            if (!confirmed) return;
+            button.setDisabled(true);
+            const removed = await unlinkOAuthProvider(this.plugin.settings.serverUrl, this.plugin.settings.apiKey, provider.id);
+            new Notice(removed ? `${provider.name} unlinked` : `Could not unlink ${provider.name}`);
+            void this.renderSignInMethods(container);
+          }));
+        } else {
+          setting.addButton((button) => button.setButtonText(`Link ${provider.name}`).onClick(async () => {
+            button.setDisabled(true).setButtonText('Waiting for browser…');
+            const result = await linkOAuthProvider(
+              this.plugin.settings.serverUrl,
+              this.plugin.settings.apiKey,
+              provider.id,
+            );
+            new Notice(result.ok ? `${provider.name} linked` : result.error);
+            void this.renderSignInMethods(container);
+          }));
+        }
+      }
+    } catch (error) {
+      loading.setText('Could not load sign-in methods from this server.');
+      console.warn('Could not load OAuth providers:', error);
+    }
+  }
+
   private async registerAtServer(serverUrl: string): Promise<{
     uid: string;
     apiKey: string;
@@ -541,9 +626,16 @@ export class ColabSettingsTab extends PluginSettingTab {
     const storage = info.storage;
     const plan = info.plan || 'free';
     const currentPlan = info.plans[plan];
+    const currentCollaboratorLimit = info.collaborators?.limit ?? currentPlan?.collaboratorLimit;
     const upgradePlans = Object.values(info.plans)
       .filter((candidate) => candidate.checkoutAvailable && candidate.id !== plan
-        && (candidate.quotaBytes <= 0 || (!storage.unlimited && candidate.quotaBytes > storage.limitBytes)))
+        && (candidate.quotaBytes <= 0
+          || (!storage.unlimited && candidate.quotaBytes > storage.limitBytes)
+          || (candidate.collaboratorLimit !== undefined
+            && (currentCollaboratorLimit === undefined
+              || (candidate.collaboratorLimit <= 0 && currentCollaboratorLimit > 0)
+              || (candidate.collaboratorLimit > 0 && currentCollaboratorLimit > 0
+                && candidate.collaboratorLimit > currentCollaboratorLimit)))))
       .sort((a, b) => (a.quotaBytes <= 0 ? Number.POSITIVE_INFINITY : a.quotaBytes)
         - (b.quotaBytes <= 0 ? Number.POSITIVE_INFINITY : b.quotaBytes));
     const planName = currentPlan?.name || plan;
@@ -556,28 +648,59 @@ export class ColabSettingsTab extends PluginSettingTab {
     }
 
     let usageText = storage.unlimited
-      ? `${fmtBytes(storage.usedBytes)} used — unlimited`
+      ? `${fmtBytes(storage.usedBytes)} used, unlimited storage`
       : `${fmtBytes(storage.usedBytes)} of ${fmtBytes(storage.limitBytes)} (${storage.usagePercent}%)`;
     if (currentPlan && !currentPlan.isDefault && info.planExpiresAt) {
-      usageText += ` · ${planName} until ${new Date(info.planExpiresAt).toLocaleDateString()}`;
+      usageText += ` · active until ${new Date(info.planExpiresAt).toLocaleDateString()}`;
     }
 
-    const planSetting = new Setting(container)
+    const currentCard = container.createDiv();
+    currentCard.setCssStyles({
+      background: 'var(--background-secondary)',
+      border: '1px solid var(--background-modifier-border)',
+      borderRadius: 'var(--radius-m)',
+      padding: '0 var(--size-4-3)',
+      marginBottom: 'var(--size-4-4)',
+    });
+    const collaboratorUsage = info.collaborators
+      ? info.collaborators.limit <= 0
+        ? `${info.collaborators.used} named collaborators, unlimited`
+        : `${info.collaborators.used} of ${info.collaborators.limit} named collaborators`
+      : null;
+    const planSetting = new Setting(currentCard)
       .setName(`Current plan: ${planName}`)
-      .setDesc(usageText);
+      .setDesc([usageText, collaboratorUsage].filter(Boolean).join(' · '));
 
     planSetting.addExtraButton((btn) => {
       btn.setIcon('refresh-cw').setTooltip('Refresh plan').onClick(() => this.renderPlanSection(container));
     });
 
+    const upgradeGrid = upgradePlans.length ? container.createDiv() : null;
+    upgradeGrid?.setCssStyles({
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+      gap: 'var(--size-4-3)',
+      marginBottom: 'var(--size-4-4)',
+    });
     for (const upgradePlan of upgradePlans) {
       const quota = upgradePlan.quotaBytes <= 0 ? 'Unlimited storage*' : `${fmtBytes(upgradePlan.quotaBytes)} storage`;
-      const description = [upgradePlan.description, quota, upgradePlan.priceLabel].filter(Boolean).join(' · ');
-      new Setting(container)
+      const collaboratorAllowance = upgradePlan.collaboratorLimit === undefined
+        ? null
+        : upgradePlan.collaboratorLimit <= 0
+          ? 'Unlimited named collaborators'
+          : `${upgradePlan.collaboratorLimit} named collaborators`;
+      const description = [upgradePlan.description, quota, collaboratorAllowance].filter(Boolean).join(' · ');
+      const card = upgradeGrid!.createDiv();
+      card.setCssStyles({
+        border: '1px solid var(--background-modifier-border)',
+        borderRadius: 'var(--radius-m)',
+        padding: '0 var(--size-4-3)',
+      });
+      new Setting(card)
         .setName(upgradePlan.name)
         .setDesc(description)
         .addButton((btn) => {
-          const label = `Choose ${upgradePlan.name}`;
+          const label = upgradePlan.priceLabel || `Choose ${upgradePlan.name}`;
           btn.setButtonText(label).setCta().onClick(async () => {
             if (!info.recoveryConfigured) {
               const proceed = await this.confirmAction(

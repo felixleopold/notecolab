@@ -1,200 +1,238 @@
 # Note Colab
 
-Share an Obsidian note as a clean web page, send it directly to another vault,
-or edit it together in real time.
+[Install from Community Plugins](obsidian://show-plugin?id=notecolab) · [Guide](https://notecolab.com/help) · [Status](https://notecolab.com/status) · [Source](https://github.com/felixleopold/notecolab)
 
-Note Colab works immediately with the hosted service at
-[notecolab.com](https://notecolab.com). You do not need an email address or
-password to share your first note.
+Share a Markdown note as a clean web page, send it directly to another Obsidian
+vault, or edit it together in real time.
 
-## Your first five minutes
+Note Colab keeps your working copy in Obsidian. Recipients can use a browser or
+import the note into their own vault.
 
-1. Install and enable **Note Colab** in Obsidian.
-2. Follow the short first-use guide. Note Colab connects automatically and
-   creates an anonymous identity for the hosted service.
-3. Open the note you want to share.
-4. Open the command palette with **Ctrl/Cmd+P** and run **Note Colab: Share
-   note**. You can also open the Note Colab dashboard from the ribbon and select
-   **Share current note**.
-5. Choose who should have access, then copy and send the link.
-
-That is all you need to start. If anything feels confusing or stops you from
-using Note Colab, please [tell me on
-GitHub](https://github.com/felixleopold/notecolab/issues). Feature requests are
-welcome too.
+![Choose who can read or edit a note in Obsidian](docs/images/plugin-share-options.png)
 
 ## Install
 
-### From Obsidian's Community plugins directory
+1. In Obsidian, open **Settings → Community plugins**.
+2. Select **Browse** and search for **Note Colab**.
+3. Select **Install**, then **Enable**.
+4. Review the first-use explanation and select **Connect to notecolab.com**.
 
-1. Open **Settings → Community plugins**.
-2. Turn off Restricted mode if Obsidian asks you to.
-3. Select **Browse**, search for **Note Colab**, and select **Install**.
-4. Select **Enable**.
+The hosted service does not require an email address or password for your first
+share. You can connect to a compatible self-hosted server from Note Colab
+settings instead.
 
-### Manual installation
+## Share your first note
 
-1. Download `main.js` and `manifest.json` from the [latest GitHub
-   release](https://github.com/felixleopold/notecolab/releases/latest).
-2. Create `<vault>/.obsidian/plugins/notecolab/`.
-3. Put both files in that folder.
-4. Reload Obsidian and enable **Note Colab** under **Settings → Community
-   plugins**.
+1. Open a Markdown note.
+2. Open the command palette with **Ctrl/Cmd+P**.
+3. Run **Note Colab: Share note**.
+4. Choose an access mode and, when available, an expiry.
+5. Select the share action and send the complete link.
 
-## Share a note
+You can also open the Note Colab dashboard from the ribbon and select **Share
+current note**.
 
-Open a Markdown note, then run **Note Colab: Share note** from the command
-palette or select **Share current note** in the Note Colab dashboard.
-
-Choose the access that fits what you want to do:
-
-| Access | Who can open it | What they can do |
+| Access mode | Best for | Who can open it |
 | --- | --- | --- |
-| **View-only link** | Anyone with the link | Read the note on the web. Direct recipients receive a locked copy in Obsidian that stays updated. |
-| **Editable link** | Anyone with the link | Edit together in a browser or after importing the note into Obsidian. |
-| **Invited collaborators** | People you invite | Edit after signing in with an identity on the same Note Colab server. |
-
-For a view-only or editable link, you can also choose an expiry time and adjust
-the web reader's appearance. To send a note directly to another vault, select a
-trusted contact or paste the recipient's User ID.
-
-Select **Share & copy web link** or **Share with invited collaborators** when
-you are ready. Note Colab copies the resulting link so you can send it using
-your preferred messaging app.
+| **View-only link** | Publishing a clean reader or delivering a locked, updating vault copy | Anyone with the complete link |
+| **Editable link** | Fast collaboration in Obsidian or a browser | Anyone with the complete link |
+| **Invited collaborators** | Access tied to specific Note Colab identities | People you invite on the same server |
 
 Note Colab adds `colab_*` properties to shared-note frontmatter. Keep these
-properties in the note. They identify the server copy and contain the
-information the plugin needs to reconnect securely.
+properties. They identify the server copy and let the plugin reconnect to it.
+The `colab_encryption_key` and complete `colab_link` contain access secrets.
+They are visible in Properties and source mode and are included in vault backups.
+Close Properties before recording or screen sharing, and never publish the raw
+frontmatter. Note Colab excludes these properties from its shared content.
 
-## Open a note someone shared
+## Open a shared note
 
-- **Web link:** Open the link in a browser. No Obsidian installation is needed
-  to read a view-only note or join an editable session.
-- **Share link in Obsidian:** Run **Note Colab: Import shared note** and paste
-  the link.
-- **Direct delivery:** Accept the notification in Obsidian. You can enable
-  **Auto-accept shared notes** in settings if you want future deliveries to
-  enter the vault without confirmation.
+- **In a browser:** open the complete link to read or edit according to its
+  permission.
+- **In Obsidian:** run **Note Colab: Import shared note** and paste the link.
+- **Direct delivery:** accept the notification in Obsidian. You can opt into
+  automatic imports in settings.
 
-A directly delivered view-only note is a mirror. It stays synchronized with the
-owner's version and cannot be edited accidentally. Run **Create editable copy
-of read-only note** to make an independent local copy.
+A directly delivered view-only note is a locked mirror that follows the owner's
+version. Run **Create editable copy of read-only note** to make an independent
+local copy.
 
-If a link belongs to a different Note Colab server, the plugin shows the server
-name and asks you to trust it before connecting. Direct invitations only work
-when both people have identities on the server hosting the note.
+Links can point to another Note Colab server. The plugin shows that server and
+asks before connecting. Direct invitations require both identities to be on the
+server hosting the note.
 
-## Collaborate and manage shares
+<details>
+<summary>See the browser reader</summary>
 
-Editable notes synchronize while they are open. Use **Stop share sync** to stop
-the live connection without removing the share. Use **Revoke note share** to
-remove the server copy and disable its links.
+<img src="docs/images/share-reader.png" alt="A shared Markdown note in the browser reader" width="420">
 
-The bottom-right status indicator shows **Only you here** or **You + N others**
-for the current note. Click it to see participants and their public usernames,
-when set. The web reader and editor show the same presence information.
-You count while the note is the active tab in a focused, visible window.
-Switching tabs or apps removes you from the count without stopping background
-sync. Multiple connections from one signed-in account count once per note;
-anonymous sessions count separately. Older clients without foreground reporting
-are not included, and a disconnected client cannot show a current count.
+</details>
 
-Your public username and foreground presence are visible to the hosting server
-and people with access to the note, including anonymous link visitors. Full User
-IDs and private trusted-contact aliases are not included in the participant list.
-Presence is temporary and does not record an activity history.
+## Work together and manage access
 
-Open the dashboard from the ribbon or run **Note Colab: Open dashboard** to:
+Editable notes synchronize while they are open. Collaborator cursors and the
+bottom-right presence indicator show who is currently in the active note. Public
+usernames are optional. Presence is temporary and is not an activity history or
+an authorization signal.
 
-- share the active note;
-- see notes you own and notes shared with you;
-- copy or revoke links;
-- manage collaborators;
-- review storage use;
-- remove server copies you no longer need.
+Useful commands:
 
-Run **Note Colab: Manage shared links** while viewing a shared note to create
-separate links with different permissions, expiry times, labels, or reader
-appearance. Revoking one link does not revoke the others.
+- **Manage shared links** creates, copies, expires, or revokes individual links.
+- **Stop share sync** stops the live connection without removing the share.
+- **Revoke note share** removes the server copy and disables its links.
+- **Open dashboard** lists notes you own and notes shared with you, along with
+  collaborators and storage use.
 
-## Your identity and settings
+## Saving, reconnecting, and recovery
 
-Open **Settings → Note Colab** to find your User ID, sharing defaults, trusted
-contacts, and storage information.
+The status bar distinguishes saving, saved on this device, saved to the server,
+and pending offline changes. Editable notes use encrypted local collaboration
+checkpoints and retry server saves after reconnection. A stale server snapshot
+is merged rather than silently replacing a newer version. Older installed
+clients do not have this protection, so update every collaborating device.
 
-- Your User ID lets another Note Colab user invite you directly.
-- An optional public username makes your User ID easier for collaborators to
-  recognize.
-- Trusted-contact aliases are private to your vault.
-- A Web password is optional unless you want to use the server's web dashboard.
+Obsidian Markdown remains your working copy. Keep normal vault backups. When quota permits, one
+previous encrypted server version is retained for recovery, not a full history.
+Run **Recover previous shared note version to new file** to inspect it in an
+independent, unshared file. Browser editors can restore the previous version
+after confirmation; that restoration changes the shared note.
 
-Save your full User ID and set a Web password before buying storage. Together,
+## Publish a folder
+
+Run **Note Colab: Share folder**, enter a vault-relative folder path, choose
+read-only or editable access, then review the file list before publishing.
+Note Colab recursively publishes Markdown files and supported embedded images,
+plus an encrypted folder index for recipients.
+
+![Review the Markdown files before publishing a folder](docs/images/plugin-folder-review.png)
+
+While Obsidian is open, the plugin watches published folders for additions, edits,
+and renames. Editable notes still need their normal per-note live connection.
+Run the command again to resume a partial failure. Recipients can run **Import
+shared folder**, preview its files, and choose to watch for new additions. New
+files require approval; existing unrelated files are never overwritten.
+
+**Manage watched shared folders** stops or resumes folder-index updates and
+recipient watching. Already-shared notes keep their own synchronization settings.
+It does not revoke published shares. Local deletions disappear
+from the next folder index but do not
+delete their remote note shares. Revoke old remote notes individually when
+needed.
+
+## Publishing without surprises
+
+The share dialog previews the Markdown body before upload. Properties are excluded,
+but Markdown comments and embedded content may still contain private information.
+Review the preview and linked images before sharing.
+
+For view-only links, choose an updating note or a snapshot. A snapshot publishes
+that version without automatically uploading later edits. To replace a snapshot,
+revoke it and publish a new share. Existing updating links keep their behavior.
+
+## Plans and hosting
+
+The hosted server reports its current limits in the plugin and on the
+[pricing page](https://notecolab.com/pricing). Named collaborators count once
+across an owner's notes; public-link visitors do not use collaborator seats.
+Only the owner needs an upgrade, when upgrades are offered.
+
+Paid periods are not a promise of permanent storage. Our
+[proposed hosting policy](docs/HOSTING-POLICY.md) describes honoring paid-through
+dates, retirement notice, and an export window. It is a draft for new paid plans;
+automatic quota-expiry deletion is not enabled.
+
+## Your identity
+
+Open **Settings → Note Colab** to see your User ID, trusted contacts, server,
+sharing defaults, and storage status.
+
+- Your User ID is safe to give to collaborators. Your API key is not.
+- An optional public username helps collaborators recognize you.
+- Trusted-contact aliases stay in your vault.
+- A NoteColab password supports UID login, vault unlocking, and account recovery.
+- If your server offers Google or GitHub sign-in, you can link it in Settings.
+  Only providers configured by that server appear.
+
+Before buying storage, save your full User ID and set a web password. Together,
 they can restore the same identity, notes, and plan after reinstalling the
 plugin or moving to another vault.
 
-Changing **Server URL** creates a separate identity on the new server. It does
-not move shares, contacts, or account settings between servers.
+Provider sign-in and encryption recovery are separate. OAuth can open your
+account and creates its own revocable browser session, but it cannot unlock
+encrypted vault keys or silently replace this plugin's API key or X25519 key.
+Keep your User ID and NoteColab password for recovery.
+
+Changing **Server URL** creates a separate identity. It does not move shares,
+contacts, account settings, or plans between servers.
+
+## Security and privacy
+
+Note Colab has two distinct content paths:
+
+- Current clients encrypt REST-stored Markdown, titles, and supported images on
+  your device with AES-256-GCM before upload. The note key is after `#` in the
+  share URL and is not included in ordinary HTTP requests.
+- Live Yjs collaboration text is decrypted and visible to the relay while the
+  room is active.
+
+The service can also see metadata such as share identifiers, permissions,
+timestamps, expiry, sizes, collaborators, image filenames, and MIME types.
+Legacy notes may retain a plaintext title until a current owner client updates
+them. Note Colab is therefore not wholly zero-knowledge or end-to-end encrypted.
+
+A complete link is a capability. Anyone with a view-only link can read and copy
+the content. Anyone with an editable link can also change it. Protect your vault
+and backups because plugin data and shared-note frontmatter contain credentials
+or note keys.
+
+The plugin has no advertising or product analytics telemetry. Use HTTPS and a
+server you trust. Read the current security explanation at
+[notecolab.com/security](https://notecolab.com/security).
 
 ## Troubleshooting
 
-- **Typing disappears or the cursor jumps while another sync plugin is active:**
-  If you use SimpleSync, update it to version 0.1.28 or later on affected devices.
-  Older builds can overwrite recent edits. Test with a disposable shared note
-  open in both Obsidian and the web editor after updating.
-- **Share current note does nothing:** Make sure a Markdown note is open and
-  active, then try **Note Colab: Share note** from the command palette.
-- **Automatic connection fails:** Open **Settings → Note Colab**, confirm the
-  Server URL, and try connecting again.
-- **The note is already shared:** Run **Note Colab: Manage shared links** to
-  copy its existing link or create another one.
-- **A recipient cannot accept an invitation:** Confirm that both users are
-  connected to the same Note Colab server. Ordinary view-only and editable
-  links can be opened across servers.
+- **Share note is unavailable:** make sure a Markdown note is open and active.
+- **Connection fails:** check the Server URL in Note Colab settings and try
+  again. Hosted-service readiness is shown at
+  [notecolab.com/status](https://notecolab.com/status).
+- **An invitation cannot be accepted:** confirm both identities use the server
+  hosting the note.
+- **Typing disappears while another sync plugin is active:** update SimpleSync
+  to version 0.1.28 or later on affected devices, then test with a disposable
+  shared note.
 
-## Privacy essentials
+For more guidance, visit [notecolab.com/help](https://notecolab.com/help). To
+report a bug or request a feature, [open a GitHub
+issue](https://github.com/felixleopold/notecolab/issues). Never post private
+notes, complete share links, API keys, or recovery material.
 
-- Current clients encrypt stored Markdown, titles, and supported embedded images
-  on your device before upload.
-- The decryption key is stored after `#` in a share link. Keep the complete link
-  private and send it only to intended recipients.
-- Anyone with a view-only link can read and copy the shared content. Anyone with
-  an editable link can also change it.
-- Live collaboration text is visible to the collaboration relay while a room is
-  active. Do not treat live collaboration as a zero-knowledge channel.
-- Share metadata, including identifiers, permissions, timestamps, sizes,
-  collaborators, image filenames, and MIME types, is visible to the server.
-- Older shares may retain a plaintext title until a current owner client updates
-  them.
-- Note Colab stores its server credential and private key in Obsidian plugin
-  data, and stores note keys in shared-note frontmatter. Protect your vault and
-  its backups accordingly.
-- The plugin has no telemetry or advertising.
+The project and hosted service are maintained by [Felix Mrak](https://felixmrak.com).
+For support, privacy, or account questions, email
+[contact@felixmrak.com](mailto:contact@felixmrak.com).
 
-Use a server you trust and always use HTTPS.
+## Self-hosting
 
-## Use another server
-
-Note Colab can connect to a compatible self-hosted service:
+To use a compatible self-hosted service:
 
 1. Open **Settings → Note Colab**.
-2. Enter the server origin, such as `https://notes.example.com`. Do not append
+2. Enter the server origin, for example `https://notes.example.com`. Do not add
    `/api/v1`.
-3. Select **Connect** and enter a registration code if the server requires one.
-4. Confirm that a new User ID appears, then test a share.
+3. Select **Connect** and enter a registration code if requested.
+4. Confirm that a new User ID appears, then test a disposable share.
 
-The server must implement the Note Colab HTTP and WebSocket contract. Identities
-and direct invitations are scoped to one server.
+Identities and direct invitations are scoped to one server.
 
-## Feedback and support
+To run the API, web reader, and relay yourself, use the
+[self-hosting guide](docs/SELF-HOSTING.md). The
+[protocol](docs/PROTOCOL.md) and [security model](SECURITY-CONSIDERATIONS.md)
+explain interoperability and the limits of client encryption.
 
-Please [open a GitHub
-issue](https://github.com/felixleopold/notecolab/issues) to report a bug, request
-a feature, or explain what is holding you back from using Note Colab. Do not
-include private notes, complete share links, API keys, or other credentials.
+For a comparison with Relay, Share Note, LiveSync, and Remotely Save, see
+[choosing sharing or vault sync](docs/COMPARISON.md).
 
 ## Development
 
-Use a separate test vault for plugin development.
+Use a separate test vault. This package uses Node.js 22 and npm.
 
 ```sh
 npm ci
@@ -202,10 +240,10 @@ npm test
 npm run build
 ```
 
-Copy `main.js` and `manifest.json` into
-`<test-vault>/.obsidian/plugins/notecolab/`, then reload Obsidian.
+Copy the build output into the test vault's
+`.obsidian/plugins/notecolab/` directory, then reload Obsidian.
 
 ## License
 
-The public plugin is available under the Apache License 2.0. See `LICENSE` in
-the repository root.
+The plugin, API, relay, and web client are available under the Apache License 2.0. Source and releases
+are at [github.com/felixleopold/notecolab](https://github.com/felixleopold/notecolab).

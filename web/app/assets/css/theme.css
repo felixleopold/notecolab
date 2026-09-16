@@ -1,0 +1,199 @@
+/* ---------------------------------------------------------------------------
+ * Shared-note theming. Dark is the default (declared on :root so var() always
+ * resolves, including server-rendered markup). The `.nc-light` class — toggled
+ * on <html> by the shared-note page — flips the palette to light. The
+ * `.nc-noheader` class hides the global app bar for distraction-free reading.
+ *
+ * This file is registered in nuxt.config `css` so it loads on every page; the
+ * tokens are consumed by the layout, the shared-note page, and NoteEditor.vue.
+ * ------------------------------------------------------------------------- */
+:root {
+  /* Page + app chrome */
+  --nc-page-bg: #1e1e1e;
+  --nc-page-text: #dcddde;
+  --nc-header-bg: rgba(38, 38, 38, 0.8);
+  --nc-bg: #1e1e1e;
+  --nc-surface: #262626;
+  --nc-surface-2: #2d2d2d;
+  --nc-border: #363636;
+  --nc-text: #e8e9ea;
+  --nc-text-2: #dcddde;
+  --nc-muted: #999999;
+  --nc-faint: #666666;
+  --nc-accent: #7f6df2;
+  --nc-accent-soft: #c4b5fd;
+
+  /* Rendered markdown content */
+  --md-text: #e6edf3;
+  --md-muted: #8b949e;
+  --md-border: #30363d;
+  --md-canvas: #0d1117;
+  --md-subtle-bg: #161b22;
+  --md-link: #58a6ff;
+  --md-code-bg: rgba(110, 118, 129, 0.4);
+  --md-table-head: rgba(110, 118, 129, 0.1);
+  --md-mark-bg: rgba(210, 153, 34, 0.4);
+  --md-checkbox-border: #484f58;
+  --cm-syntax-red: #ff7b72;
+  --cm-syntax-blue: #79c0ff;
+  --cm-syntax-string: #a5d6ff;
+  --cm-syntax-purple: #d2a8ff;
+  --cm-syntax-muted: #8b949e;
+  --cm-active-line: rgba(110, 118, 129, 0.08);
+}
+
+.nc-light {
+  --nc-page-bg: #ffffff;
+  --nc-page-text: #1f2328;
+  --nc-header-bg: rgba(255, 255, 255, 0.85);
+  --nc-bg: #ffffff;
+  --nc-surface: #f6f8fa;
+  --nc-surface-2: #eaeef2;
+  --nc-border: #d0d7de;
+  --nc-text: #1f2328;
+  --nc-text-2: #32383f;
+  --nc-muted: #59636e;
+  --nc-faint: #818b98;
+  --nc-accent: #7f6df2;
+  --nc-accent-soft: #5b46d6;
+
+  --md-text: #1f2328;
+  --md-muted: #59636e;
+  --md-border: #d0d7de;
+  --md-canvas: #ffffff;
+  --md-subtle-bg: #f6f8fa;
+  --md-link: #0969da;
+  --md-code-bg: rgba(129, 139, 152, 0.2);
+  --md-table-head: rgba(129, 139, 152, 0.15);
+  --md-mark-bg: rgba(255, 209, 102, 0.5);
+  --md-checkbox-border: #8c959f;
+  --cm-syntax-red: #cf222e;
+  --cm-syntax-blue: #0550ae;
+  --cm-syntax-string: #0a3069;
+  --cm-syntax-purple: #8250df;
+  --cm-syntax-muted: #6e7781;
+  --cm-active-line: rgba(208, 215, 222, 0.24);
+}
+
+html,
+body,
+#__nuxt {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+html,
+body {
+  background-color: var(--nc-page-bg);
+  color: var(--nc-page-text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------------------------------------------------------------------------
+ * CodeMirror editor refinements (source / split modes). Colours are theme
+ * tokens so the editor matches light and dark. These were previously stranded
+ * in the unloaded main.css; they live here so they actually apply.
+ * ------------------------------------------------------------------------- */
+.cm-editor {
+  height: 100%;
+  font-size: 16px;
+  line-height: 1.7;
+  background: transparent !important;
+}
+
+.cm-editor .cm-scroller {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: 0;
+}
+
+.cm-editor .cm-content {
+  padding: 2rem 3rem;
+  max-width: 48rem;
+  margin: 0 auto;
+  caret-color: var(--nc-accent);
+  color: var(--nc-text-2);
+}
+
+.cm-editor .cm-gutters {
+  display: none;
+}
+
+.cm-editor.cm-focused {
+  outline: none;
+}
+
+.cm-editor .cm-line {
+  padding: 1px 0;
+}
+
+.cm-editor .cm-activeLine {
+  background: var(--cm-active-line) !important;
+}
+
+.cm-editor .cm-wiki-link,
+.cm-editor .cm-wiki-link span {
+  color: var(--nc-accent-soft);
+}
+
+.cm-editor .cm-selectionBackground {
+  background: rgba(127, 109, 242, 0.2) !important;
+}
+
+.cm-editor.cm-focused .cm-selectionBackground {
+  background: rgba(127, 109, 242, 0.3) !important;
+}
+
+.cm-editor .cm-cursor {
+  border-left-color: var(--nc-accent);
+}
+
+/* Yjs remote-collaborator cursors */
+.yRemoteSelection {
+  background-color: rgba(127, 109, 242, 0.25);
+}
+
+.yRemoteSelectionHead {
+  position: absolute;
+  border-left: 2px solid var(--nc-accent);
+  border-top: 2px solid var(--nc-accent);
+  height: 1.2em;
+}
+
+.yRemoteSelectionHead::after {
+  content: attr(data-name);
+  position: absolute;
+  top: -1.4em;
+  left: -2px;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--nc-accent);
+  color: white;
+  border-radius: 3px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* Hover overlays in the toolbar are white-on-dark; invert them for light mode. */
+.nc-light [class*="hover:bg-white"]:hover {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Distraction-free reading: hide the global app bar (toggled per shared note). */
+.nc-noheader header {
+  display: none !important;
+}
+
+/* App-bar links — theme-aware so they read on both light and dark headers. */
+.nc-headerlink {
+  color: var(--nc-muted);
+  transition: color 0.15s;
+}
+.nc-headerlink:hover {
+  color: var(--nc-text);
+}

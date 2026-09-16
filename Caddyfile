@@ -1,0 +1,9 @@
+{$SITE_HOST} {
+  @api path /api/* /ws/*
+  handle @api {
+    reverse_proxy api:8787
+  }
+  handle {
+    reverse_proxy web:3000
+  }
+}
