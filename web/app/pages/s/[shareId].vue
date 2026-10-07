@@ -489,7 +489,7 @@ async function loadNote() {
 
     // Decrypt content
     try {
-      decryptedContent.value = await decrypt(note.encryptedContent, encKey)
+      decryptedContent.value = (await decrypt(note.encryptedContent, encKey)).replace(/\r\n/g, '\n')
     } catch {
       error.value = 'Decryption failed'
       errorDetail.value = 'The encryption key in the URL may be incorrect or corrupted.'
@@ -646,21 +646,22 @@ async function setupYjsCollab() {
     wsProvider!.off('sync', onSync)
     const relayOnly = new Y.Doc()
     Y.applyUpdate(relayOnly, Y.encodeStateAsUpdate(yjsDoc!, preRelayVector))
-    const relayBody = relayOnly.getText('content').toString()
+    const relayBody = relayOnly.getText('content').toString().replace(/\r\n/g, '\n')
     relayOnly.destroy()
-    const mergedBody = ytext!.toString()
-    const duplicatedBaseline = !!preRelayBody && mergedBody === preRelayBody + preRelayBody
-    const independentlySeeded = duplicatedBaseline || relayBody && (
-      mergedBody === preRelayBody + relayBody
-      || mergedBody === relayBody + preRelayBody
-    )
+    const mergedBody = ytext!.toString().replace(/\r\n/g, '\n')
+    const normPreRelay = preRelayBody.replace(/\r\n/g, '\n')
+    const duplicatedBaseline = !!normPreRelay && mergedBody === normPreRelay + normPreRelay
+    const independentlySeeded = duplicatedBaseline || (!!relayBody && (
+      mergedBody === normPreRelay + relayBody
+      || mergedBody === relayBody + normPreRelay
+    ))
     if (independentlySeeded) {
-      const recoveredRelayBody = relayBody || preRelayBody
-      const recovered = !preRelayBody
+      const recoveredRelayBody = relayBody || normPreRelay
+      const recovered = !normPreRelay
         ? recoveredRelayBody
-        : preRelayBody === recoveredRelayBody
-          ? preRelayBody
-          : `${preRelayBody}\n\n<<<<<<< NoteColab recovered live room\n${recoveredRelayBody}\n>>>>>>>`
+        : normPreRelay === recoveredRelayBody
+          ? normPreRelay
+          : `${normPreRelay}\n\n<<<<<<< NoteColab recovered live room\n${recoveredRelayBody}\n>>>>>>>`
       yjsDoc!.transact(() => {
         ytext!.delete(0, ytext!.length)
         if (recovered) ytext!.insert(0, recovered)

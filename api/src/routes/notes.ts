@@ -791,6 +791,7 @@ notes.get('/:shareId', async (c) => {
     || isOwner
     || (resolved.accessMode === 'invited_edit' && isCollaborator(resolved.noteId, user?.uid).canEdit);
 
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate');
   return c.json({
     shareId: resolved.linkShareId,
     roomId: resolved.noteShareId, // canonical ID for Yjs room

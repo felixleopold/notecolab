@@ -1,6 +1,7 @@
 import { Notice, TFile, normalizePath, type App, type EventRef } from 'obsidian';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
+import diff from 'fast-diff';
 import type { ColabSettings } from '../types';
 import type { ApiClient } from '../api/client';
 import { decrypt, deriveRoomToken, deriveWriteCapability, encrypt, encryptBinary } from '../crypto/crypto';
@@ -10,13 +11,34 @@ import { findImageEmbeds } from '../share/imageEmbeds';
 import { hasMatchingEditableShareIdentity, hasMatchingShareIdentity } from './shareIdentity';
 import type { NoteColabFrontmatter } from '../share/frontmatter';
 
+export function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n/g, '\n');
+}
+
+export function applyTextDiff(target: Y.Text, nextText: string): void {
+  const previous = target.toString();
+  if (previous === nextText) return;
+  const changes = diff(previous, nextText);
+  let index = 0;
+  for (const [op, text] of changes) {
+    if (op === diff.EQUAL) {
+      index += text.length;
+    } else if (op === diff.DELETE) {
+      target.delete(index, text.length);
+    } else if (op === diff.INSERT) {
+      target.insert(index, text);
+      index += text.length;
+    }
+  }
+}
+
 // Strip frontmatter from note content — only the body syncs via Yjs
 export function parseFrontmatter(content: string): { frontmatter: string; body: string } {
   const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
   if (match) {
-    return { frontmatter: match[0], body: content.slice(match[0].length) };
+    return { frontmatter: match[0], body: normalizeLineEndings(content.slice(match[0].length)) };
   }
-  return { frontmatter: '', body: content };
+  return { frontmatter: '', body: normalizeLineEndings(content) };
 }
 
 // --- Share Sync ---
@@ -319,17 +341,8 @@ export function publishSnapshot(
         await seedServerSnapshot(snapshotDoc, storedBody, shareId, note.contentVersion || 1);
       }
       const snapshotText = snapshotDoc.getText('content');
-      const previous = snapshotText.toString();
-      let start = 0;
-      while (start < previous.length && start < body.length && previous[start] === body[start]) start++;
-      let oldEnd = previous.length, newEnd = body.length;
-      while (oldEnd > start && newEnd > start && previous[oldEnd - 1] === body[newEnd - 1]) {
-        oldEnd--;
-        newEnd--;
-      }
       snapshotDoc.transact(() => {
-        if (oldEnd > start) snapshotText.delete(start, oldEnd - start);
-        if (newEnd > start) snapshotText.insert(start, body.slice(start, newEnd));
+        applyTextDiff(snapshotText, body);
       });
       const [encrypted, encryptedCrdt] = await Promise.all([
         encrypt(body, encryptionKey),
@@ -549,20 +562,13 @@ export async function startShareSync(
       notifyShareSyncChange();
     }
 
-    function acceptFileEdit(body: string) {
+    function acceptFileEdit(rawBody: string) {
+      const body = normalizeLineEndings(rawBody);
       const previous = fileText.toString();
       if (body === previous) return;
-      let start = 0;
-      while (start < previous.length && start < body.length && previous[start] === body[start]) start++;
-      let oldEnd = previous.length, newEnd = body.length;
-      while (oldEnd > start && newEnd > start && previous[oldEnd - 1] === body[newEnd - 1]) {
-        oldEnd--;
-        newEnd--;
-      }
       const version = Y.encodeStateVector(fileDoc);
       fileDoc.transact(() => {
-        if (oldEnd > start) fileText.delete(start, oldEnd - start);
-        if (newEnd > start) fileText.insert(start, body.slice(start, newEnd));
+        applyTextDiff(fileText, body);
       });
       writingToYjs = true;
       try {
@@ -928,21 +934,22 @@ export async function startShareSync(
       try {
         const relayOnly = new Y.Doc();
         Y.applyUpdate(relayOnly, Y.encodeStateAsUpdate(doc, preRelayVector));
-        const relayBody = relayOnly.getText('content').toString();
+        const relayBody = normalizeLineEndings(relayOnly.getText('content').toString());
         relayOnly.destroy();
-        const mergedBody = ytext.toString();
-        const duplicatedBaseline = !!preRelayBody && mergedBody === preRelayBody + preRelayBody;
-        const independentlySeeded = duplicatedBaseline || relayBody && (
-          mergedBody === preRelayBody + relayBody
-          || mergedBody === relayBody + preRelayBody
-        );
+        const mergedBody = normalizeLineEndings(ytext.toString());
+        const normPreRelay = normalizeLineEndings(preRelayBody);
+        const duplicatedBaseline = !!normPreRelay && mergedBody === normPreRelay + normPreRelay;
+        const independentlySeeded = duplicatedBaseline || (!!relayBody && (
+          mergedBody === normPreRelay + relayBody
+          || mergedBody === relayBody + normPreRelay
+        ));
         if (independentlySeeded) {
-          const recoveredRelayBody = relayBody || preRelayBody;
-          const recovered = !preRelayBody
+          const recoveredRelayBody = relayBody || normPreRelay;
+          const recovered = !normPreRelay
             ? recoveredRelayBody
-            : preRelayBody === recoveredRelayBody
-              ? preRelayBody
-              : `${preRelayBody}\n\n<<<<<<< NoteColab recovered live room\n${recoveredRelayBody}\n>>>>>>>`;
+            : normPreRelay === recoveredRelayBody
+              ? normPreRelay
+              : `${normPreRelay}\n\n<<<<<<< NoteColab recovered live room\n${recoveredRelayBody}\n>>>>>>>`;
           ytext.delete(0, ytext.length);
           if (recovered) ytext.insert(0, recovered);
           initialSnapshotNeeded = true;

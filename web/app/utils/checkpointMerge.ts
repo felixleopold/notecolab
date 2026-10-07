@@ -1,5 +1,9 @@
 import * as Y from 'yjs'
 
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n/g, '\n')
+}
+
 /** Independent legacy seeds contain the same text under different Yjs identities. */
 export function mergeDeviceCheckpoint(document: Y.Doc, update: Uint8Array): void {
   const device = new Y.Doc()
@@ -14,8 +18,8 @@ export function mergeDeviceCheckpoint(document: Y.Doc, update: Uint8Array): void
     }
     if (deviceVector.size === 0) return
     const text = document.getText('content')
-    const serverBody = text.toString()
-    const deviceBody = device.getText('content').toString()
+    const serverBody = normalizeLineEndings(text.toString())
+    const deviceBody = normalizeLineEndings(device.getText('content').toString())
     if (serverBody === deviceBody) return
     // Without common history there is no safe deletion inference. Preserve both
     // versions for review instead of concatenating duplicate CRDT seed strings.
@@ -32,14 +36,15 @@ export function mergeDeviceCheckpoint(document: Y.Doc, update: Uint8Array): void
 
 /** Give simultaneous first loads the same immutable baseline, then edit with each peer's own ID. */
 export async function seedServerSnapshot(document: Y.Doc, body: string, roomId: string, version: number): Promise<void> {
-  if (!body) return
+  const normalized = normalizeLineEndings(body)
+  if (!normalized) return
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(
-    JSON.stringify(['notecolab-seed-v1', roomId, version, body]),
+    JSON.stringify(['notecolab-seed-v1', roomId, version, normalized]),
   )))
   const seed = new Y.Doc()
   try {
     seed.clientID = bytes.slice(0, 6).reduce((value, byte) => value * 256 + byte, 0)
-    seed.getText('content').insert(0, body)
+    seed.getText('content').insert(0, normalized)
     Y.applyUpdate(document, Y.encodeStateAsUpdate(seed))
   } finally { seed.destroy() }
 }
@@ -106,10 +111,11 @@ export function refreshReadOnlySnapshot(
     }
   }
 
+  const normalizedBody = normalizeLineEndings(body)
   const text = document.getText('content')
-  if (text.toString() === body) return
+  if (normalizeLineEndings(text.toString()) === normalizedBody) return
   document.transact(() => {
     text.delete(0, text.length)
-    if (body) text.insert(0, body)
+    if (normalizedBody) text.insert(0, normalizedBody)
   }, origin)
 }
