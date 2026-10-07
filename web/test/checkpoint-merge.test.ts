@@ -147,3 +147,31 @@ test('read-only refresh preserves live edits newer than a compatible REST snapsh
     assert.equal(reader.getText('content').toString(), 'shared saved live');
   } finally { owner.destroy(); reader.destroy(); peer.destroy(); }
 });
+
+test('independent device CRLF and server LF checkpoints do not duplicate or create conflict markers', () => {
+  const server = new Y.Doc();
+  const device = new Y.Doc();
+  try {
+    server.getText('content').insert(0, 'hello\nworld');
+    device.getText('content').insert(0, 'hello\r\nworld');
+    mergeDeviceCheckpoint(server, Y.encodeStateAsUpdate(device));
+    assert.equal(server.getText('content').toString(), 'hello\nworld');
+  } finally { server.destroy(); device.destroy(); }
+});
+
+test('seedServerSnapshot produces identical clientID and content for CRLF and LF text without duplication', async () => {
+  const left = new Y.Doc();
+  const right = new Y.Doc();
+  try {
+    await Promise.all([
+      seedServerSnapshot(left, 'line 1\r\nline 2', 'room', 1),
+      seedServerSnapshot(right, 'line 1\nline 2', 'room', 1),
+    ]);
+    const leftUpdate = Y.encodeStateAsUpdate(left);
+    Y.applyUpdate(left, Y.encodeStateAsUpdate(right));
+    Y.applyUpdate(right, leftUpdate);
+    assert.equal(left.getText('content').toString(), 'line 1\nline 2');
+    assert.equal(right.getText('content').toString(), 'line 1\nline 2');
+  } finally { left.destroy(); right.destroy(); }
+});
+

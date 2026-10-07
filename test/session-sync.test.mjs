@@ -667,3 +667,93 @@ test('initial sync cannot finish after and overwrite queued remote typing', asyn
 
   stopShareSync(app, file.path);
 });
+
+test('concurrent CRLF vs LF seeding deduplicates into a single canonical LF copy without conflict markers', async () => {
+  globalThis.window = globalThis;
+  globalThis.localStorage = { getItem: () => null, setItem() {} };
+  const roomId = 'room-crlf-lf-dedup';
+  const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const serverDoc = new Y.Doc();
+  serverDoc.getText('content').insert(0, 'line 1\nline 2\nline 3');
+  let binary = '';
+  for (const byte of Y.encodeStateAsUpdate(serverDoc)) binary += String.fromCharCode(byte);
+  const api = {
+    usesAccountCredentials: false,
+    withWriteCapability() { return this; },
+    async getNoteContent() {
+      return {
+        encryptedContent: await encrypt('line 1\nline 2\nline 3', key),
+        encryptedCrdt: await encrypt(btoa(binary), key),
+        contentVersion: 1,
+      };
+    },
+    async updateSnapshot() { return { ok: true, contentVersion: 2 }; },
+    async listImages() { return []; },
+  };
+  const frontmatter = `---\ncolab_share_id: ${roomId}\ncolab_link: https://example.com/s/${roomId}#${key}\ncolab_access: public_edit\n---\n`;
+  const file = new TFile(`${roomId}.md`);
+  let content = frontmatter + 'line 1\r\nline 2\r\nline 3';
+  const app = {
+    vault: {
+      async read() { return content; },
+      async modify(_file, value) { content = value; },
+      on() { return {}; },
+      offref() {},
+    },
+    metadataCache: { getFirstLinkpathDest: () => null },
+  };
+  globalThis[initialYTextSymbol] = 'line 1\nline 2\nline 3';
+  await startShareSync(app, { serverUrl: 'https://example.com', apiKey: '' }, file, roomId, api, key);
+  const provider = globalThis[providerSymbol];
+  try {
+    await provider.emit('sync', true);
+    const result = provider.doc.getText('content').toString();
+    assert.equal(result, 'line 1\nline 2\nline 3');
+    assert.doesNotMatch(result, /<<<<<<< NoteColab recovered/);
+  } finally {
+    stopShareSync(app, file.path);
+    serverDoc.destroy();
+  }
+});
+
+test('local edit on text with repetitive patterns preserves concurrent remote edits without telescoping or slicing tokens', async () => {
+  const initialText = [
+    '# Heading with some intro',
+    '![[Pasted image 2026-10-06T07-52-14.png]]',
+    'Section one with content text here.',
+    '![[Pasted image 2026-10-06T07-52-14.png]]',
+    'Section two with more content text here.',
+    '![[Pasted image 2026-10-06T07-52-14.png]]',
+    'Footer note concluding the document.',
+  ].join('\n');
+
+  const session = await createSession('room-repetitive-diff', initialText);
+  const { app, file, provider, ytext } = session;
+  try {
+    ytext.insert(0, initialText);
+    await provider.emit('sync', true);
+
+    const insertTarget = 'Section two with ';
+    const remoteOffset = ytext.toString().indexOf(insertTarget) + insertTarget.length;
+    ytext.insert(remoteOffset, 'COLLABORATOR_TYPING ');
+
+    const modifiedText = initialText
+      .replace('Section one with content', 'Section one with UPDATED content')
+      .replace('Footer note', 'Footer note FINAL');
+
+    await session.editBody(modifiedText);
+
+    const merged = ytext.toString();
+    assert.ok(merged.includes('COLLABORATOR_TYPING'), 'Concurrent typing must be preserved');
+    assert.equal(
+      (merged.match(/!\[\[Pasted image 2026-10-06T07-52-14\.png\]\]/g) || []).length,
+      3,
+      'All image embeds must remain intact without slicing',
+    );
+    assert.ok(merged.includes('Section one with UPDATED content'));
+    assert.ok(merged.includes('Footer note FINAL'));
+    assert.doesNotMatch(merged, /!\[\[Pasted imag[^e]/);
+  } finally {
+    stopShareSync(app, file.path);
+  }
+});

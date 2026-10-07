@@ -82,4 +82,9 @@ test('encrypted snapshots reject stale replacement and retain recoverable histor
   const persisted = db.prepare('SELECT encrypted_content, encrypted_crdt FROM notes WHERE id = ?').get(noteId) as { encrypted_content: Buffer; encrypted_crdt: Buffer | null };
   assert.equal(persisted.encrypted_content.toString(), 'legacy edit');
   assert.equal(persisted.encrypted_crdt, null, 'old CRDT text must not replace a newer legacy body-only edit');
+
+  const getRes = await notes.request('/snapshot-room');
+  assert.equal(getRes.status, 200);
+  assert.match(getRes.headers.get('cache-control') || '', /no-store/);
 });
+
