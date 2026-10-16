@@ -258,6 +258,7 @@ export class ManageLinksModalView extends Modal {
     this.component?.$set({
       loading: false,
       links: result?.links || [],
+      noteShareId: result?.noteShareId || this.noteShareId,
       collaborators,
     });
   }
