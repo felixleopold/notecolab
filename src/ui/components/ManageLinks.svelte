@@ -22,7 +22,6 @@
   }
 
   export let links: LinkInfo[] = [];
-  export let noteShareId = '';
   export let collaborators: Collaborator[] = [];
   export let contacts: Contact[] = [];
   export let serverUrl = '';
@@ -98,10 +97,6 @@
     const c = contacts.find((ct) => ct.uid === uid);
     return c?.name || uid.substring(0, 12) + '…';
   }
-
-  // Older clients reach the note through the Original link's ID, so the server
-  // keeps it working while another public link exists.
-  $: originalStaysOpen = links.some((link) => link.shareId !== noteShareId && link.accessMode !== 'invited_edit');
 
   $: hasInvitedLink = links.some((link) => link.accessMode === 'invited_edit');
   $: invitedLinks = links.filter((link) => link.accessMode === 'invited_edit');
@@ -226,9 +221,6 @@
                   <button class="ml-btn ml-btn-danger" on:click={() => confirmDeleteId = link.shareId}>Delete</button>
                 {/if}
               </div>
-              {#if confirmDeleteId === link.shareId && link.shareId === noteShareId && originalStaysOpen}
-                <p class="ml-hint ml-warning">People with this link keep the same access as your other public links for as long as those links allow it.</p>
-              {/if}
               {#if sendingLinkId === link.shareId}
                 <div class="ml-form">
                   <div class="ml-field">
@@ -491,10 +483,6 @@
     font-size: var(--font-ui-smaller);
     padding: 4px 0;
     margin: 0;
-  }
-
-  .ml-warning {
-    color: var(--color-yellow, #ff9800);
   }
 
   .ml-link-card {

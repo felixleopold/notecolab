@@ -429,6 +429,7 @@ export default class ColabPlugin extends Plugin {
       this.app.metadataCache.on('changed', (file) => {
         const cache = this.app.metadataCache.getFileCache(file);
         const fm = noteColabFrontmatter(cache?.frontmatter);
+        const previousLink = this.sharedNoteCache.get(file.path)?.link;
         if (fm?.colab_share_id) {
           this.sharedNoteCache.set(file.path, {
             shareId: fm.colab_share_id,
@@ -460,6 +461,12 @@ export default class ColabPlugin extends Plugin {
         if (activeShareId && !hasEditableIdentity) {
           stopShareSync(this.app, file.path);
           this.updateStatusBar();
+        } else if (!activeShareId && fm?.colab_link !== previousLink && joinsLiveSync(fm)
+            && this.app.workspace.getActiveFile()?.path === file.path) {
+          // The open note's stored link changed to a syncable one, e.g. deleting
+          // a view-only Original replaced it with an editable link. Plain saves
+          // must not restart a session that was stopped for revoked access.
+          void this.autoConnectShareSync();
         }
         if (!fm?.colab_share_id || !fm?.colab_link) {
           cancelSnapshot(file.path);

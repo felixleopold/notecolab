@@ -4,6 +4,8 @@ import type { ApiClient } from '../../api/client';
 import type { Contact } from '../../types';
 import { encryptKeyForRecipient } from '../../crypto/keyExchange';
 import { DirectoryKeyChangedError } from '../../crypto/identityTrust';
+import { noteColabFrontmatter, type NoteColabFrontmatter } from '../../share/frontmatter';
+import { shareIdFromLink } from '../../share/shareLink';
 
 export class ManageLinksModalView extends Modal {
   private component: InstanceType<typeof ManageLinksComponent> | null = null;
@@ -101,7 +103,7 @@ export class ManageLinksModalView extends Modal {
       const ok = await this.api.deleteLink(e.detail.linkShareId);
       if (ok) {
         new Notice('Link deleted');
-        await this.loadData();
+        await this.replaceStoredLink(e.detail.linkShareId, await this.loadData());
       } else {
         new Notice('Failed to delete link');
       }
@@ -249,7 +251,26 @@ export class ManageLinksModalView extends Modal {
     this.component = null;
   }
 
-  private async loadData(): Promise<void> {
+  // A deleted link stops working, so Copy must hand out a surviving one instead.
+  private async replaceStoredLink(deletedShareId: string, links: { shareId: string; accessMode: string; expiresAt: string | null }[]): Promise<void> {
+    const survivor = links.find((link): link is typeof link & { accessMode: 'public_edit' | 'read_only' } =>
+      (link.accessMode === 'public_edit' || link.accessMode === 'read_only')
+      && (!link.expiresAt || new Date(link.expiresAt) > new Date()));
+    const file = this.app.vault.getMarkdownFiles().find((f) =>
+      noteColabFrontmatter(this.app.metadataCache.getFileCache(f)?.frontmatter)?.colab_share_id === this.noteShareId);
+    if (!survivor || !file) return;
+    await this.app.fileManager.processFrontMatter(file, (fm: NoteColabFrontmatter) => {
+      if (fm.colab_link && shareIdFromLink(fm.colab_link) === deletedShareId) {
+        fm.colab_link = fm.colab_link.replace(`/s/${deletedShareId}`, `/s/${survivor.shareId}`);
+        if (fm.colab_link_id) fm.colab_link_id = survivor.shareId;
+        fm.colab_access = survivor.accessMode;
+        if (survivor.expiresAt) fm.colab_expires = survivor.expiresAt;
+        else delete fm.colab_expires;
+      }
+    });
+  }
+
+  private async loadData(): Promise<{ shareId: string; accessMode: string; expiresAt: string | null }[]> {
     const [result, collaborators] = await Promise.all([
       this.api.listLinks(this.noteShareId),
       this.api.listCollaborators(this.noteShareId),
@@ -258,8 +279,8 @@ export class ManageLinksModalView extends Modal {
     this.component?.$set({
       loading: false,
       links: result?.links || [],
-      noteShareId: result?.noteShareId || this.noteShareId,
       collaborators,
     });
+    return result?.links || [];
   }
 }

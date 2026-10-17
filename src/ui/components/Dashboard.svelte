@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { ownedNoteAccessMode } from '../../share/linkAccess';
 
   const dispatch = createEventDispatcher();
 
@@ -150,10 +151,7 @@
     });
   }
 
-  function primaryAccessMode(note: Note): string {
-    if (note.links.length === 0) return 'read_only';
-    return note.links[0].accessMode;
-  }
+  const primaryAccessMode = (note: Note) => ownedNoteAccessMode(note.links);
 </script>
 
 <div class="notecolab-dashboard">
