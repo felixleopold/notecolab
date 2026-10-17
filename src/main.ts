@@ -20,6 +20,7 @@ import { DirectoryKeyChangedError } from './crypto/identityTrust';
 import { decrypt, encrypt, deriveRoomToken } from './crypto/crypto';
 import { websocketCredentials } from './api/credentials';
 import { NotePresence, isForeground } from './session/presence';
+import { joinsLiveSync } from './session/shareIdentity';
 import { ShareModalView } from './ui/views/ShareModalView';
 import { ImportModal } from './ui/ImportModal';
 import { ManageLinksModalView } from './ui/views/ManageLinksModalView';
@@ -455,7 +456,7 @@ export default class ColabPlugin extends Plugin {
         const hasEditableIdentity = fm?.colab_share_id === activeShareId
           && !!fm?.colab_link
           && !!encryptionKey
-          && (fm?.colab_access === 'public_edit' || fm?.colab_access === 'invited_edit');
+          && joinsLiveSync(fm);
         if (activeShareId && !hasEditableIdentity) {
           stopShareSync(this.app, file.path);
           this.updateStatusBar();
@@ -824,8 +825,9 @@ export default class ColabPlugin extends Plugin {
         showChrome: opts.showChrome,
         collaborators: opts.collaborators,
       });
-      // Auto-start sync for editable shares
-      if (result && opts.accessMode !== 'read_only') {
+      // Owners join live sync whatever the link's mode, so links added later
+      // (for example an edit link on a view-only share) sync immediately.
+      if (result) {
         const key = result.shareUrl.split('#')[1] || '';
         await startShareSync(this.app, this.settings, file, result.shareId, this.api, key);
       }
@@ -1084,16 +1086,17 @@ export default class ColabPlugin extends Plugin {
       const stillValid = fm?.colab_share_id === activeShareId
         && !!fm?.colab_link
         && !!encryptionKey
-        && (fm?.colab_access === 'public_edit' || fm?.colab_access === 'invited_edit');
+        && joinsLiveSync(fm);
       if (stillValid) return;
       stopShareSync(this.app, file.path);
       this.updateStatusBar();
     }
     if (!fm?.colab_share_id || !fm?.colab_link) return;
-    // Only auto-sync editable shares
-    if (fm.colab_access !== 'public_edit' && fm.colab_access !== 'invited_edit') return;
-    // Skip if link is locally known to be expired (invited_edit never expires)
-    if (fm.colab_access !== 'invited_edit' && fm.colab_expires) {
+    // Only auto-sync editable shares and the owner's own notes
+    if (!joinsLiveSync(fm)) return;
+    // Skip if link is locally known to be expired (owners and invited_edit
+    // are never locked out by link expiry)
+    if (fm.colab_owner !== true && fm.colab_access !== 'invited_edit' && fm.colab_expires) {
       if (new Date(fm.colab_expires) < new Date()) return;
     }
     const encKey = fm.colab_encryption_key ||
@@ -1160,7 +1163,7 @@ export default class ColabPlugin extends Plugin {
     const fm = file && noteColabFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
     const provider = file ? getShareSync(file.path)?.provider : undefined;
     const supported = fm?.colab_share_id && fm.colab_link
-      && (provider || fm.colab_access === 'read_only');
+      && (provider || (fm.colab_access === 'read_only' && !joinsLiveSync(fm)));
     const identity = supported ? JSON.stringify([
       file?.path, fm.colab_share_id, fm.colab_link, fm.colab_link_id,
       fm.colab_encryption_key, this.settings.serverUrl, this.settings.apiKey,

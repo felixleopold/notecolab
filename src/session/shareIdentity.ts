@@ -9,8 +9,9 @@ function frontmatterValue(frontmatter: string, key: string): string {
 
 /**
  * A live session remains valid only while the file still identifies the same
- * editable share. Read the raw file rather than MetadataCache so removing the
- * tracking keys cannot race a local or remote sync event.
+ * share with an allowed access mode. Read the raw file rather than
+ * MetadataCache so removing the tracking keys cannot race a local or remote
+ * sync event.
  */
 export function hasMatchingShareIdentity(
   frontmatter: string,
@@ -29,6 +30,25 @@ export function hasMatchingShareIdentity(
     && allowedAccess.includes(access as ShareAccess);
 }
 
+/**
+ * Owners always join live document sync: the server grants them write through
+ * their account token whatever the mode or expiry of the link they shared.
+ * Everyone else needs an editable link.
+ */
+export function joinsLiveSync(
+  frontmatter: { colab_owner?: boolean; colab_access?: string } | undefined,
+): boolean {
+  return frontmatter?.colab_owner === true
+    || frontmatter?.colab_access === 'public_edit'
+    || frontmatter?.colab_access === 'invited_edit';
+}
+
+export function ownsShare(frontmatter: string): boolean {
+  return frontmatterValue(frontmatter, 'colab_owner') === 'true';
+}
+
 export function hasMatchingEditableShareIdentity(frontmatter: string, shareId: string): boolean {
-  return hasMatchingShareIdentity(frontmatter, shareId, ['public_edit', 'invited_edit']);
+  return hasMatchingShareIdentity(frontmatter, shareId, ownsShare(frontmatter)
+    ? ['public_edit', 'invited_edit', 'read_only']
+    : ['public_edit', 'invited_edit']);
 }

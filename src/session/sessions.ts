@@ -7,7 +7,7 @@ import { deriveRoomToken, deriveWriteCapability, encrypt, encryptBinary } from '
 import { websocketCredentials } from '../api/credentials';
 import { downloadMissingAssets } from '../share/assets';
 import { findImageEmbeds } from '../share/imageEmbeds';
-import { hasMatchingEditableShareIdentity, hasMatchingShareIdentity } from './shareIdentity';
+import { hasMatchingEditableShareIdentity, hasMatchingShareIdentity, ownsShare } from './shareIdentity';
 import type { NoteColabFrontmatter } from '../share/frontmatter';
 
 // Strip frontmatter from note content — only the body syncs via Yjs
@@ -521,6 +521,8 @@ export async function startShareSync(
     // Periodic health check: detect expiry or permission changes
     if (api) {
       const healthApi = api;
+      // An owner's link mode only limits other people; the owner keeps write.
+      const owner = ownsShare(initialFrontmatter);
       let consecutiveFailures = 0;
       let lastFailureReason: string | null = null;
       const FAILURE_THRESHOLD = 3; // require 3 consecutive same-reason failures before acting
@@ -546,7 +548,7 @@ export async function startShareSync(
             reason = 'not_found';
           } else if (meta === 'forbidden') {
             reason = 'forbidden';
-          } else if (meta.accessMode === 'read_only') {
+          } else if (meta.accessMode === 'read_only' && !owner) {
             reason = 'read_only';
           }
 
