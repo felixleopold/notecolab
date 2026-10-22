@@ -7,6 +7,10 @@ import { DirectoryKeyChangedError } from '../../crypto/identityTrust';
 import { stopShareSync } from '../../session/sessions';
 import { noteColabFrontmatter } from '../../share/frontmatter';
 import { isRecipientImport, recipientNoteTitle } from '../../share/readOnlyMirror';
+import { DeleteSharedNoteModal } from '../DeleteSharedNoteModal';
+
+/** Resolves the component's pending request so it can keep or clear its state. */
+type Done = { done?: (ok: boolean) => void };
 
 export const DASHBOARD_VIEW_TYPE = 'notecolab-dashboard';
 
@@ -48,6 +52,7 @@ export class DashboardView extends ItemView {
         ownerUid: '',
         shareId,
         accessMode,
+        // Recipient copies record the server's effective access, not the link mode.
         canEdit: accessMode !== 'read_only',
         createdAt: new Date(file.stat.ctime).toISOString(),
         updatedAt: new Date(file.stat.mtime).toISOString(),
@@ -104,23 +109,33 @@ export class DashboardView extends ItemView {
         },
       });
 
-      this.component.$on('refresh', () => { void this.loadData(); });
-      this.component.$on('share-current', () => { void this.plugin.shareCurrentNote(); });
-      this.component.$on('open-note', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleOpenNote(e.detail)); });
-      this.component.$on('copy-link', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleCopyLink(e.detail)); });
-      this.component.$on('manage-links', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleManageLinks(e.detail)); });
-      this.component.$on('revoke', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleRevoke(e.detail)); });
-      this.component.$on('import-share', (e: CustomEvent<{ shareId: string; encryptedKey: string; nonce: string; senderUid: string; id: number }>) => { void this.safeHandle(() => this.handleImportShare(e.detail)); });
-      this.component.$on('dismiss-share', (e: CustomEvent<{ id: number }>) => { void this.safeHandle(() => this.handleDismissShare(e.detail)); });
-      this.component.$on('delete-note', (e: CustomEvent<{ noteShareId: string }>) => { void this.safeHandle(() => this.handleDeleteNote(e.detail)); });
-      this.component.$on('leave-share', (e: CustomEvent<{ shareId: string }>) => { void this.safeHandle(() => this.handleLeaveShare(e.detail)); });
+      const component = this.component;
+      const on = <T>(name: string, handler: (detail: T) => void | Promise<unknown>) => {
+        component.$on(name, (e: CustomEvent<T & Done>) => {
+          void this.safeHandle(() => handler(e.detail)).then((ok) => e.detail.done?.(ok));
+        });
+      };
+      component.$on('refresh', () => { void this.loadData(); });
+      component.$on('share-current', () => { void this.plugin.shareCurrentNote(); });
+      on<{ noteShareId: string }>('open-note', (detail) => this.handleOpenNote(detail));
+      on<{ noteShareId: string }>('copy-link', (detail) => this.handleCopyLink(detail));
+      on<{ noteShareId: string }>('manage-links', (detail) => this.handleManageLinks(detail));
+      on<{ noteShareId: string; title: string }>('revoke', (detail) => {
+        new DeleteSharedNoteModal(this.app, detail.title, () => {
+          void this.safeHandle(() => this.handleRevoke(detail));
+        }).open();
+      });
+      on<{ shareId: string; encryptedKey: string; nonce: string; senderUid: string; id: number }>('import-share', (detail) => this.handleImportShare(detail));
+      on<{ id: number }>('dismiss-share', (detail) => this.handleDismissShare(detail));
+      on<{ noteShareId: string }>('delete-note', (detail) => this.handleDeleteNote(detail));
+      on<{ shareId: string }>('leave-share', (detail) => this.handleLeaveShare(detail));
 
       await this.loadData();
     } catch (e) {
       console.error('NoteColab: Dashboard failed to initialize:', e);
       container.empty();
       container.createDiv({
-        text: `Dashboard failed to load: ${e instanceof Error ? e.message : String(e)}`,
+        text: 'The dashboard couldn’t open. Close it and open it again; if that fails, reload Obsidian.',
         cls: 'notecolab-error',
       });
     }
@@ -152,7 +167,7 @@ export class DashboardView extends ItemView {
       if (!notesResult && !storage && localSharedNotes.length === 0) {
         this.component.$set({
           loading: false,
-          error: 'Failed to load data from server. Check your server URL and connection.',
+          error: 'Couldn’t load your shared notes. Check your connection and the server URL in Note Colab settings.',
         });
         return;
       }
@@ -215,11 +230,10 @@ export class DashboardView extends ItemView {
       });
     } catch (e) {
       console.error('NoteColab: Failed to load dashboard data:', e);
-      new Notice('NoteColab: Failed to load dashboard data');
       if (this.component) {
         this.component.$set({
           loading: false,
-          error: `Failed to load data: ${e instanceof Error ? e.message : String(e)}`,
+          error: 'Couldn’t load your shared notes. Check your connection and try again.',
         });
       }
     } finally {
@@ -227,13 +241,22 @@ export class DashboardView extends ItemView {
     }
   }
 
-  private async safeHandle(fn: () => void | Promise<void>) {
+  /** Run a handler; resolves false when it failed or returned false. */
+  private async safeHandle(fn: () => unknown): Promise<boolean> {
     try {
-      await fn();
+      return await fn() !== false;
     } catch (e) {
       console.error('NoteColab dashboard handler error:', e);
-      new Notice(`NoteColab: ${e instanceof Error ? e.message : 'An error occurred'}`);
+      new Notice('NoteColab: something went wrong. Check your connection and try again.');
+      return false;
     }
+  }
+
+  private findNoteFile(shareId: string) {
+    return this.app.vault.getMarkdownFiles().find((f) => {
+      const cache = this.app.metadataCache.getFileCache(f);
+      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === shareId;
+    });
   }
 
   private handleOpenNote(detail: { noteShareId: string }) {
@@ -250,66 +273,26 @@ export class DashboardView extends ItemView {
     }
   }
 
-  private handleCopyLink(detail: { noteShareId: string }) {
-    const file = this.app.vault.getMarkdownFiles().find((f) => {
-      const cache = this.app.metadataCache.getFileCache(f);
-      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
-    });
-
-    if (file) {
-      const cache = this.app.metadataCache.getFileCache(file);
-      const link = noteColabFrontmatter(cache?.frontmatter)?.colab_link;
-      if (link) {
-        void navigator.clipboard.writeText(link);
-        new Notice('Share link copied to clipboard');
-      } else {
-        new Notice('No share link found for this note');
-      }
-    } else {
-      new Notice('Note not found in vault');
-    }
-  }
-
-  private handleManageLinks(detail: { noteShareId: string }) {
-    const file = this.app.vault.getMarkdownFiles().find((f) => {
-      const cache = this.app.metadataCache.getFileCache(f);
-      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
-    });
-
+  private async handleCopyLink(detail: { noteShareId: string }) {
+    const file = this.findNoteFile(detail.noteShareId);
     if (!file) {
       new Notice('Note not found in vault');
       return;
     }
-
-    const cache = this.app.metadataCache.getFileCache(file);
-    const fm = noteColabFrontmatter(cache?.frontmatter);
-    const encKey = fm?.colab_encryption_key ||
-      (fm?.colab_link ? fm.colab_link.split('#')[1] : '');
-
-    if (!encKey) {
-      new Notice('Encryption key not found. Re-share the note to fix this.');
-      return;
-    }
-
-    // Import dynamically to avoid circular dependencies
-    void import('./ManageLinksModalView').then(({ ManageLinksModalView }) => {
-      new ManageLinksModalView(
-        this.app,
-        this.plugin.api,
-        detail.noteShareId,
-        encKey,
-        this.plugin.settings.serverUrl,
-        this.plugin.settings.contacts,
-        this.plugin.settings.secretKey
-      ).open();
-    });
+    await this.plugin.copyNoteShareLink(file);
   }
 
-  private async handleRevoke(detail: { noteShareId: string }) {
-    const file = this.app.vault.getMarkdownFiles().find((f) => {
-      const cache = this.app.metadataCache.getFileCache(f);
-      return noteColabFrontmatter(cache?.frontmatter)?.colab_share_id === detail.noteShareId;
-    });
+  private handleManageLinks(detail: { noteShareId: string }) {
+    const file = this.findNoteFile(detail.noteShareId);
+    if (!file) {
+      new Notice('Note not found in vault');
+      return;
+    }
+    this.plugin.openManageLinks(file);
+  }
+
+  private async handleRevoke(detail: { noteShareId: string; title: string }) {
+    const file = this.findNoteFile(detail.noteShareId);
 
     if (file) {
       const { revokeShare } = await import('../../share/shareNote');
@@ -319,20 +302,20 @@ export class DashboardView extends ItemView {
       // Note not in vault, delete directly from server
       const ok = await this.plugin.api.deleteNote(detail.noteShareId);
       if (ok) {
-        new Notice('Share revoked');
+        new Notice(`"${detail.title}" was deleted from the server.`);
         await this.loadData();
       } else {
-        new Notice('Failed to revoke share');
+        new Notice('Couldn’t delete the shared note from the server. Check your connection and try again.');
       }
     }
   }
 
-  private async handleImportShare(detail: { shareId: string; encryptedKey: string; nonce: string; senderUid: string; id: number }) {
+  private async handleImportShare(detail: { shareId: string; encryptedKey: string; nonce: string; senderUid: string; id: number }): Promise<boolean> {
     try {
       const senderInfo = await this.plugin.api.getPublicKey(detail.senderUid);
       if (!senderInfo?.publicKey) {
-        new Notice('Cannot decrypt share: sender public key not found');
-        return;
+        new Notice('Couldn’t open this invitation: the sender’s identity key wasn’t found. Check your connection or ask them to send it again.');
+        return false;
       }
 
       const { decryptKeyFromSender } = await import('../../crypto/keyExchange');
@@ -344,8 +327,8 @@ export class DashboardView extends ItemView {
       );
 
       if (!noteKey) {
-        new Notice('Failed to decrypt share key');
-        return;
+        new Notice('Couldn’t open this invitation. It may have been sent to an earlier installation; ask the sender to send it again.');
+        return false;
       }
 
       const { importNote } = await import('../../share/importNote');
@@ -356,32 +339,36 @@ export class DashboardView extends ItemView {
       });
       if (!imported) {
         new Notice('Import failed; the invitation remains pending');
-        return;
+        return false;
       }
       await this.plugin.api.ackPendingShare(detail.id);
       await this.loadData();
+      return true;
     } catch (e) {
       console.error('Failed to import share:', e);
       new Notice(e instanceof DirectoryKeyChangedError
         ? `${e.message}. Verify it with the sender, then reset its pin in Note Colab settings.`
-        : 'Failed to import shared note', 15_000);
+        : 'Couldn’t import this note. The invitation remains pending; check your connection and try again.', 15_000);
+      return false;
     }
   }
 
-  private async handleDismissShare(detail: { id: number }) {
+  private async handleDismissShare(detail: { id: number }): Promise<boolean> {
     const ok = await this.plugin.api.dismissPendingShare(detail.id);
     if (ok) {
+      new Notice('Invitation declined');
       await this.loadData();
     } else {
-      new Notice('Failed to dismiss share');
+      new Notice('Couldn’t decline the invitation. Check your connection and try again.');
     }
+    return ok;
   }
 
-  private async handleLeaveShare(detail: { shareId: string }) {
+  private async handleLeaveShare(detail: { shareId: string }): Promise<boolean> {
     const left = await this.plugin.api.leaveSharedNote(detail.shareId);
     if (!left) {
-      new Notice('Failed to remove shared note');
-      return;
+      new Notice('Couldn’t leave the shared note. Check your connection and try again.');
+      return false;
     }
 
     const file = this.app.vault.getMarkdownFiles().find((candidate) => {
@@ -402,11 +389,12 @@ export class DashboardView extends ItemView {
       });
     }
 
-    new Notice('Removed shared note. Any local file was kept as a private copy.');
+    new Notice('You left the shared note. Any local file was kept as a private copy.');
     await this.loadData();
+    return true;
   }
 
-  private async handleDeleteNote(detail: { noteShareId: string }) {
+  private async handleDeleteNote(detail: { noteShareId: string }): Promise<boolean> {
     const ok = await this.plugin.api.deleteNote(detail.noteShareId);
     if (ok) {
       // Clean frontmatter from vault file
@@ -428,7 +416,8 @@ export class DashboardView extends ItemView {
       new Notice('Note deleted from server');
       await this.loadData();
     } else {
-      new Notice('Failed to delete note');
+      new Notice('Couldn’t delete the note from the server. Check your connection and try again.');
     }
+    return ok;
   }
 }

@@ -1,6 +1,6 @@
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
-import type { WebsocketProvider } from 'y-websocket';
+import type { LiveProvider } from '../live/liveProvider';
 
 export interface PresenceRoster {
   participants: { id: string; name: string; client: 'web' | 'obsidian' }[];
@@ -65,7 +65,7 @@ export class NotePresence {
     } catch { /* Ignore unsupported or malformed presence messages. */ }
   }
 
-  attach(provider: WebsocketProvider) {
+  attach(provider: LiveProvider) {
     const previous = provider.messageHandlers[4] ?? (() => {});
     this.connected = provider.wsconnected;
     provider.messageHandlers[4] = (_encoder, decoder, _provider, fromSocket) => {

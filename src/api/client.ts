@@ -1,5 +1,7 @@
 import { requestUrl, type RequestUrlResponse } from 'obsidian';
 import type { ColabSettings, NoteContent, SessionInfo } from '../types';
+import type { LiveModeRequest, LiveModeResponse } from '../live/enable';
+import type { LiveMode } from '../live/mode';
 import { requestHeaders } from './credentials';
 import { directoryIdentityId, pinDirectoryPublicKey } from '../crypto/identityTrust';
 import { requestErrorMessage, requestErrorStatus } from './errors';
@@ -7,6 +9,32 @@ import { requestErrorMessage, requestErrorStatus } from './errors';
 function responseJson<T>(response: RequestUrlResponse): T {
   // Obsidian exposes parsed JSON as `any`; keep that untyped boundary in one place.
   return response.json as T;
+}
+
+export type SnapshotUpdateResult =
+  | { ok: true; contentVersion: number }
+  | {
+      ok: false;
+      status?: number;
+      /** e.g. `live_e2e_update_required` when the note switched to encrypted live mode. */
+      code?: string;
+      conflict?: {
+        contentVersion: number;
+        encryptedContent: string | null;
+        encryptedCrdt: string | null;
+      };
+    };
+
+export interface ShareLinkInfo {
+  shareId: string;
+  label: string;
+  accessMode: string;
+  expiresAt: string | null;
+  createdAt: string;
+  /** The Original link after the owner replaced it: no longer usable anonymously. */
+  retired?: boolean;
+  /** Pre-`retired` name for the same server flag. */
+  identityOnly?: boolean;
 }
 
 export class ApiClient {
@@ -19,10 +47,14 @@ export class ApiClient {
   private includeCredentials = true;
   private writeCapability?: string;
 
-  constructor(
-    private settings: ColabSettings,
-    private persistSettings?: () => Promise<void>,
-  ) {}
+  private settings: ColabSettings;
+  private persistSettings?: () => Promise<void>;
+
+  // Plain fields, not parameter properties, so Node's type stripping can load this in tests.
+  constructor(settings: ColabSettings, persistSettings?: () => Promise<void>) {
+    this.settings = settings;
+    this.persistSettings = persistSettings;
+  }
 
   /** Base URL every request targets: a foreign-origin override, or the configured server. */
   private get baseUrl(): string {
@@ -55,6 +87,11 @@ export class ApiClient {
 
   get usesAccountCredentials(): boolean {
     return this.includeCredentials;
+  }
+
+  /** The signed-in account, only for clients that send its credentials. */
+  get accountUid(): string | undefined {
+    return this.includeCredentials ? this.settings.uid || undefined : undefined;
   }
 
   private get headers(): Record<string, string> {
@@ -121,15 +158,15 @@ export class ApiClient {
     }
   }
 
-  async getNoteMeta(shareId: string): Promise<{ accessMode: string; expiresAt: string | null } | 'expired' | 'not_found' | 'forbidden' | null> {
+  async getNoteMeta(shareId: string): Promise<{ accessMode: string; expiresAt: string | null; contentVersion?: number; liveMode?: LiveMode } | 'expired' | 'not_found' | 'forbidden' | null> {
     try {
       const res = await requestUrl({
         url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/meta`,
         method: 'GET',
         headers: this.headers,
       });
-      const json = responseJson<{ access_mode: string; expires_at: string | null }>(res);
-      return { accessMode: json.access_mode, expiresAt: json.expires_at };
+      const json = responseJson<{ access_mode: string; expires_at: string | null; contentVersion?: number; liveMode?: LiveMode }>(res);
+      return { accessMode: json.access_mode, expiresAt: json.expires_at, contentVersion: json.contentVersion, liveMode: json.liveMode };
     } catch (error: unknown) {
       const status = requestErrorStatus(error);
       if (status === 410) return 'expired';
@@ -157,6 +194,95 @@ export class ApiClient {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Persist a matched encrypted Markdown/Yjs checkpoint. `baseVersion` makes
+   * stale writers fail with a mergeable 409 instead of replacing newer work.
+   */
+  async updateSnapshot(shareId: string, data: {
+    encryptedContent: string;
+    encryptedCrdt: string;
+    baseVersion: number;
+    /** 2 for encrypted live notes (room-bound checkpoint); omitted for #31's format 1. */
+    crdtFormat?: 2;
+  }): Promise<SnapshotUpdateResult> {
+    try {
+      // Obsidian's thrown errors omit the response body, which a 409 needs.
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}`,
+        method: 'PATCH',
+        headers: this.headers,
+        body: JSON.stringify(data),
+        throw: false,
+      });
+      if (res.status >= 200 && res.status < 300) {
+        return { ok: true, contentVersion: responseJson<{ contentVersion: number }>(res).contentVersion };
+      }
+      if (res.status === 409) {
+        const json = responseJson<{
+          code?: string;
+          current?: {
+            contentVersion: number;
+            encryptedContent: string | null;
+            encryptedCrdt: string | null;
+          };
+        }>(res);
+        if (json.code === 'snapshot_conflict' && json.current) {
+          return { ok: false, status: res.status, conflict: json.current };
+        }
+        return { ok: false, status: res.status, code: json.code };
+      }
+      return { ok: false, status: res.status };
+    } catch (error: unknown) {
+      return { ok: false, status: requestErrorStatus(error) };
+    }
+  }
+
+  /** Owner only: switch a note to encrypted live mode (docs/LIVE-E2E-ENCRYPTION.md §6.2). */
+  async setLiveMode(shareId: string, request: LiveModeRequest): Promise<LiveModeResponse> {
+    try {
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/live-mode`,
+        method: 'PUT',
+        headers: this.headers,
+        body: JSON.stringify(request),
+        throw: false,
+      });
+      if (res.status >= 200 && res.status < 300) {
+        return { ok: true, contentVersion: responseJson<{ contentVersion: number }>(res).contentVersion };
+      }
+      let code: string | undefined;
+      try {
+        code = responseJson<{ code?: string }>(res).code;
+      } catch {
+        // A proxy error page has no JSON body.
+      }
+      return { ok: false, status: res.status, code };
+    } catch (error: unknown) {
+      return { ok: false, status: requestErrorStatus(error) };
+    }
+  }
+
+  async getNoteHistory(shareId: string): Promise<{
+    currentVersion: number;
+    revisions: {
+      contentVersion: number;
+      encryptedContent: string | null;
+      encryptedCrdt: string | null;
+      createdAt: string;
+    }[];
+  } | null> {
+    try {
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/history`,
+        method: 'GET',
+        headers: this.headers,
+      });
+      return responseJson(res);
+    } catch {
+      return null;
     }
   }
 
@@ -268,12 +394,13 @@ export class ApiClient {
 
   // --- Link management ---
 
+  /** `'forbidden'` means the caller is not the owner; `null` means the request failed. */
   async listLinks(shareId: string): Promise<{
     noteShareId: string;
     title: string | null;
     encryptedTitle: string | null;
-    links: { shareId: string; label: string; accessMode: string; expiresAt: string | null; createdAt: string }[];
-  } | null> {
+    links: ShareLinkInfo[];
+  } | 'forbidden' | null> {
     try {
       const res = await requestUrl({
         url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/links`,
@@ -281,7 +408,9 @@ export class ApiClient {
         headers: this.headers,
       });
       return responseJson(res);
-    } catch {
+    } catch (error: unknown) {
+      if (requestErrorStatus(error) === 403) return 'forbidden';
+      console.error('NoteColab: listLinks failed:', error);
       return null;
     }
   }
@@ -300,6 +429,25 @@ export class ApiClient {
       });
       return responseJson(res);
     } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Create a replacement link with the Original link's settings and retire the
+   * Original for anonymous use. Only called after the owner explicitly opts in.
+   */
+  async replaceOriginalLink(noteShareId: string): Promise<{ shareId: string; accessMode: string; expiresAt: string | null } | null> {
+    try {
+      const res = await requestUrl({
+        url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(noteShareId)}/links/replace-original`,
+        method: 'POST',
+        headers: this.headers,
+        body: '{}',
+      });
+      return responseJson(res);
+    } catch (error) {
+      console.error('NoteColab: replaceOriginalLink failed:', error);
       return null;
     }
   }
@@ -444,8 +592,10 @@ export class ApiClient {
     checkoutAvailable: boolean;
     proPrice: string;
     upgradePlanId?: string | null;
-    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean }>;
+    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean; collaboratorLimit?: number }>;
     registration?: { mode: 'open' | 'invite' | 'closed'; inviteRequired: boolean };
+    /** The server supports encrypted live collaboration (docs/LIVE-E2E-ENCRYPTION.md). */
+    liveE2E?: boolean;
   } | null> {
     try {
       const res = await requestUrl({
@@ -465,11 +615,12 @@ export class ApiClient {
     checkoutAvailable: boolean;
     proPrice: string;
     upgradePlanId?: string | null;
-    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean }>;
+    plans: Record<string, { id: string; name: string; description: string | null; quotaBytes: number; priceLabel: string | null; durationDays: number | null; checkoutAvailable: boolean; isDefault: boolean; collaboratorLimit?: number }>;
     plan?: string;
     planExpiresAt?: string | null;
     recoveryConfigured?: boolean;
     storage?: { usedBytes: number; limitBytes: number; unlimited: boolean; usagePercent: number };
+    collaborators?: { limit: number; used: number; requested?: number; ok?: boolean; plan?: string };
   } | null> {
     try {
       const res = await requestUrl({
@@ -503,7 +654,8 @@ export class ApiClient {
 
   // --- Collaborator management ---
 
-  async listCollaborators(shareId: string): Promise<{ uid: string; canEdit: boolean }[]> {
+  /** `null` means the request failed, not that the note has no collaborators. */
+  async listCollaborators(shareId: string): Promise<{ uid: string; canEdit: boolean }[] | null> {
     try {
       const res = await requestUrl({
         url: `${this.baseUrl}/api/v1/notes/${encodeURIComponent(shareId)}/collaborators`,
@@ -511,8 +663,9 @@ export class ApiClient {
         headers: this.headers,
       });
       return responseJson<{ collaborators?: { uid: string; canEdit: boolean }[] }>(res).collaborators || [];
-    } catch {
-      return [];
+    } catch (error) {
+      console.error('NoteColab: listCollaborators failed:', error);
+      return null;
     }
   }
 

@@ -5,6 +5,7 @@ export interface NoteColabFrontmatter extends Record<string, unknown> {
   colab_access?: 'public_edit' | 'invited_edit' | 'read_only';
   colab_encryption_key?: string;
   colab_owner?: boolean;
+  colab_update_mode?: 'snapshot' | 'live';
   colab_expires?: string;
   colab_session?: string;
 }

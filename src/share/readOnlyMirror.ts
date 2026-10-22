@@ -6,6 +6,18 @@ export function isReadOnlyRecipient(frontmatter: Record<string, unknown> | undef
     && frontmatter.colab_share_id.length > 0;
 }
 
+/**
+ * The `colab_access` a vault copy records. A link's mode is not the caller's
+ * permission (a view-only collaborator can hold an invited-edit link), so a
+ * recipient the server denies editing gets a read-only mirror.
+ */
+export function recordedAccess<Mode extends string>(
+  note: { accessMode: Mode; canEdit?: boolean },
+  isOwner: boolean,
+): Mode | 'read_only' {
+  return !isOwner && note.canEdit === false ? 'read_only' : note.accessMode;
+}
+
 /** True for a locally tracked note received from someone else. */
 export function isRecipientImport(frontmatter: Record<string, unknown> | undefined): boolean {
   return frontmatter?.colab_owner === false

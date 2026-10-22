@@ -11,6 +11,12 @@ import {
 } from '../crypto/identityTrust';
 import { noteColabFrontmatter } from '../share/frontmatter';
 import { requestErrorMessage, requestErrorStatus } from '../api/errors';
+import {
+  linkedOAuthProviders,
+  oauthProviders,
+  unlinkOAuthProvider,
+} from '../auth/oauth';
+import { copyToClipboard } from './clipboard';
 
 /**
  * Only open http(s) checkout URLs. The URL is returned by the (user-configured,
@@ -35,6 +41,8 @@ function fmtBytes(bytes: number): string {
 
 export class ColabSettingsTab extends PluginSettingTab {
   plugin: ColabPlugin;
+  /** The last web-access key upload failed; offer a retry. */
+  private webAccessSyncFailed = false;
 
   constructor(app: App, plugin: ColabPlugin) {
     super(app, plugin);
@@ -171,8 +179,18 @@ export class ColabSettingsTab extends PluginSettingTab {
       cls: 'setting-item-description',
     });
 
-    new Setting(containerEl)
-      .setName('API Key')
+    new Setting(containerEl).setName('Account').setHeading();
+    const accountCard = containerEl.createDiv();
+    accountCard.setCssStyles({
+      background: 'var(--background-secondary)',
+      border: '1px solid var(--background-modifier-border)',
+      borderRadius: 'var(--radius-m)',
+      padding: '0 var(--size-4-3)',
+      marginBottom: 'var(--size-4-5)',
+    });
+
+    new Setting(accountCard)
+      .setName('API key')
       .setDesc('Your authentication key (auto-generated on connect)')
       .addText((text) => {
         text
@@ -180,7 +198,7 @@ export class ColabSettingsTab extends PluginSettingTab {
           .setDisabled(true);
       });
 
-    const uidSetting = new Setting(containerEl)
+    const uidSetting = new Setting(accountCard)
       .setName('User ID')
       .setDesc('Your unique identifier — share this with collaborators so they can add you as an invited editor')
       .addText((text) => {
@@ -191,8 +209,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     if (this.plugin.settings.uid) {
       uidSetting.addButton((btn) => {
         btn.setButtonText('Copy').onClick(() => {
-          void navigator.clipboard.writeText(this.plugin.settings.uid);
-          new Notice('User ID copied to clipboard');
+          void copyToClipboard(this.app, this.plugin.settings.uid, 'User ID copied to clipboard');
         });
       });
     }
@@ -204,27 +221,29 @@ export class ColabSettingsTab extends PluginSettingTab {
       } catch {
         // Keep settings usable so account recovery remains available.
       }
-      new Setting(containerEl)
+      new Setting(accountCard)
         .setName('Identity fingerprint')
         .setDesc('Compare this with collaborators through another channel before they reset a changed key pin.')
         .addText((text) => text.setValue(fingerprint).setDisabled(true))
         .addButton((btn) => btn.setButtonText('Copy').onClick(() => {
-          void navigator.clipboard.writeText(fingerprint);
-          new Notice('Identity fingerprint copied');
+          void copyToClipboard(this.app, fingerprint, 'Identity fingerprint copied');
         }));
     }
 
+    const signInMethods = accountCard.createDiv();
+    void this.renderSignInMethods(signInMethods);
+
     let pendingUsername = this.plugin.settings.username;
-    new Setting(containerEl)
-      .setName('Public username')
+    new Setting(accountCard)
+      .setName('Public display name')
       .setDesc('Shown when someone adds your User ID and in the server admin dashboard. Contacts can replace it with a private alias.')
       .addText((text) => text
-        .setPlaceholder('Optional username')
+        .setPlaceholder('Optional display name')
         .setValue(this.plugin.settings.username)
         .onChange((value) => { pendingUsername = value.trim(); }))
       .addButton((button) => button.setButtonText('Save').onClick(async () => {
         if (pendingUsername && (pendingUsername.length < 2 || pendingUsername.length > 40)) {
-          new Notice('Username must be between 2 and 40 characters');
+          new Notice('Display name must be between 2 and 40 characters');
           return;
         }
         button.setDisabled(true).setButtonText('Saving…');
@@ -233,9 +252,9 @@ export class ColabSettingsTab extends PluginSettingTab {
           this.plugin.settings.username = result.username || '';
           this.plugin.settings.usernamePromptState = 'done';
           await this.plugin.saveSettings();
-          new Notice(result.username ? 'Username saved' : 'Username removed');
+          new Notice(result.username ? 'Display name saved' : 'Display name removed');
         } else {
-          new Notice('Could not save username');
+          new Notice('Couldn’t save your display name. Check your connection and try again.');
         }
         button.setDisabled(false).setButtonText('Save');
       }));
@@ -294,7 +313,7 @@ export class ColabSettingsTab extends PluginSettingTab {
     // Trusted contacts section
     new Setting(containerEl).setName('Trusted contacts').setHeading();
     containerEl.createEl('p', {
-      text: 'Add contacts by User ID. Their public username is filled in automatically; an optional alias is private to this vault.',
+      text: 'Add contacts by User ID. Their public display name is filled in automatically; an optional alias is private to this vault.',
       cls: 'setting-item-description',
     });
 
@@ -334,30 +353,30 @@ export class ColabSettingsTab extends PluginSettingTab {
           return;
         }
         btn.setDisabled(true);
-        btn.setButtonText('Saving...');
+        btn.setButtonText('Saving…');
         const result = await this.plugin.api.setPassword(webPassword);
         if (result.ok && result.vaultSalt) {
           try {
-            const vaultKey = await deriveVaultKey(webPassword, result.vaultSalt);
-            const noteKeys = this.collectNoteKeys();
-            if (noteKeys.length > 0) {
-              const encrypted: { noteShareId: string; encryptedKey: string }[] = [];
-              for (const nk of noteKeys) {
-                encrypted.push({ noteShareId: nk.noteShareId, encryptedKey: await encryptWithVaultKey(nk.encryptionKey, vaultKey) });
-              }
-              await this.plugin.api.uploadVaultKeys(encrypted);
-            }
-            this.plugin.settings.vaultKey = vaultKey;
+            this.plugin.settings.vaultKey = await deriveVaultKey(webPassword, result.vaultSalt);
             await this.plugin.saveSettings();
-            new Notice('Web password set. ' + noteKeys.length + ' key(s) synced.');
+            const synced = await this.uploadWebAccessKeys();
+            this.webAccessSyncFailed = synced === false;
+            new Notice(synced === false
+              ? 'Web password set, but web access to your shared notes couldn’t be enabled. Use “Retry” under Enable web access to shared notes.'
+              : synced === 0
+                ? 'Web password set'
+                : `Web password set. ${synced} shared note${synced === 1 ? '' : 's'} can be opened on the web.`, 10_000);
           } catch (e) {
-            console.warn('Failed to sync vault keys:', e);
-            new Notice('Password set, but failed to sync keys. Try syncing manually.');
+            console.error('NoteColab: enabling web access after setting the password failed', e);
+            this.webAccessSyncFailed = !!this.plugin.settings.vaultKey;
+            new Notice(this.plugin.settings.vaultKey
+              ? 'Web password set, but web access to your shared notes couldn’t be enabled. Use “Retry” under Enable web access to shared notes.'
+              : 'Web password set, but this device couldn’t prepare web access. Set the password again to retry.', 10_000);
           }
         } else if (result.ok) {
           new Notice('Web password set');
         } else {
-          new Notice('Failed to set password');
+          new Notice('Couldn’t set the web password. Check your connection and try again.');
         }
         btn.setButtonText('Save');
         btn.setDisabled(false);
@@ -366,31 +385,36 @@ export class ColabSettingsTab extends PluginSettingTab {
     });
 
     if (this.plugin.settings.vaultKey) {
+      const label = this.webAccessSyncFailed ? 'Retry' : 'Update now';
       new Setting(containerEl)
-        .setName('Sync vault keys')
-        .setDesc('Re-encrypt and upload all note keys for web dashboard access')
+        .setName('Enable web access to shared notes')
+        .setDesc(this.webAccessSyncFailed
+          ? 'The last upload failed, so some shared notes may not open on the web dashboard yet.'
+          : 'Encrypts each shared note’s key with your web password and uploads it, so the web dashboard can open these notes after you sign in. Run it again after sharing notes from another device.')
         .addButton((btn) => {
-          btn.setButtonText('Sync now').onClick(async () => {
+          btn.setButtonText(label).onClick(async () => {
             btn.setDisabled(true);
-            btn.setButtonText('Syncing...');
-            const noteKeys = this.collectNoteKeys();
-            if (noteKeys.length === 0) {
-              new Notice('No shared notes to sync');
-              btn.setButtonText('Sync now');
-              btn.setDisabled(false);
-              return;
+            btn.setButtonText('Updating…');
+            try {
+              const synced = await this.uploadWebAccessKeys();
+              if (synced === false) {
+                new Notice('Couldn’t enable web access. Check your connection and storage, then try again.');
+              } else {
+                new Notice(synced === 0
+                  ? 'No shared notes in this vault yet'
+                  : `${synced} shared note${synced === 1 ? '' : 's'} can be opened on the web`);
+              }
+              const failed = synced === false;
+              if (failed !== this.webAccessSyncFailed) {
+                this.webAccessSyncFailed = failed;
+                this.display();
+                return;
+              }
+            } catch (error) {
+              console.error('NoteColab: enabling web access failed', error);
+              new Notice('Couldn’t enable web access. Try again.');
             }
-            const encrypted: { noteShareId: string; encryptedKey: string }[] = [];
-            for (const nk of noteKeys) {
-              encrypted.push({ noteShareId: nk.noteShareId, encryptedKey: await encryptWithVaultKey(nk.encryptionKey, this.plugin.settings.vaultKey) });
-            }
-            const ok = await this.plugin.api.uploadVaultKeys(encrypted);
-            if (ok) {
-              new Notice('Synced ' + encrypted.length + ' vault key(s)');
-            } else {
-              new Notice('Failed to sync vault keys');
-            }
-            btn.setButtonText('Sync now');
+            btn.setButtonText(label);
             btn.setDisabled(false);
           });
         });
@@ -451,6 +475,67 @@ export class ColabSettingsTab extends PluginSettingTab {
             btn.setDisabled(false).setButtonText('Create new');
           });
       });
+  }
+
+  private async renderSignInMethods(container: HTMLElement): Promise<void> {
+    container.empty();
+    new Setting(container).setName('Sign-in methods').setHeading();
+    if (!this.plugin.settings.apiKey) {
+      container.createEl('p', {
+        text: 'Connect this plugin before linking a sign-in provider.',
+        cls: 'setting-item-description',
+      });
+      return;
+    }
+
+    const loading = container.createEl('p', { text: 'Checking available providers…', cls: 'setting-item-description' });
+    try {
+      const [providers, linked] = await Promise.all([
+        oauthProviders(this.plugin.settings.serverUrl),
+        linkedOAuthProviders(this.plugin.settings.serverUrl, this.plugin.settings.apiKey),
+      ]);
+      loading.remove();
+      if (!providers.length) {
+        container.createEl('p', {
+          text: 'Use your User ID and password to sign in on this server.',
+          cls: 'setting-item-description',
+        });
+        return;
+      }
+      container.createEl('p', {
+        text: 'Link a provider to sign in to the web dashboard. This does not replace this plugin credential or its encryption key, and it does not unlock encrypted vault keys without your existing password.',
+        cls: 'setting-item-description',
+      });
+      for (const provider of providers) {
+        const isLinked = linked.includes(provider.id);
+        const setting = new Setting(container)
+          .setName(provider.name)
+          .setDesc(isLinked ? 'Linked to this Note Colab account' : 'Not linked');
+        if (isLinked) {
+          setting.addButton((button) => button.setButtonText('Unlink').setWarning().onClick(async () => {
+            const confirmed = await this.confirmAction(
+              `Unlink ${provider.name}?`,
+              `This removes ${provider.name} as a web sign-in method. It does not delete your Note Colab account, notes, or this plugin credential.`,
+              'Unlink',
+            );
+            if (!confirmed) return;
+            button.setDisabled(true);
+            const removed = await unlinkOAuthProvider(this.plugin.settings.serverUrl, this.plugin.settings.apiKey, provider.id);
+            new Notice(removed ? `${provider.name} unlinked` : `Could not unlink ${provider.name}`);
+            void this.renderSignInMethods(container);
+          }));
+        } else {
+          setting.addButton((button) => button.setButtonText('Manage on web').onClick(() => {
+            const accountUrl = new URL('/login', this.plugin.settings.serverUrl);
+            window.open(accountUrl.toString(), '_blank', 'noopener,noreferrer');
+            new Notice(`Sign in on the web dashboard to link ${provider.name}.`);
+          }));
+        }
+      }
+    } catch (error) {
+      loading.setText('Could not load sign-in methods from this server.');
+      console.warn('Could not load OAuth providers:', error);
+    }
   }
 
   private async registerAtServer(serverUrl: string): Promise<{
@@ -541,9 +626,16 @@ export class ColabSettingsTab extends PluginSettingTab {
     const storage = info.storage;
     const plan = info.plan || 'free';
     const currentPlan = info.plans[plan];
+    const currentCollaboratorLimit = info.collaborators?.limit ?? currentPlan?.collaboratorLimit;
     const upgradePlans = Object.values(info.plans)
       .filter((candidate) => candidate.checkoutAvailable && candidate.id !== plan
-        && (candidate.quotaBytes <= 0 || (!storage.unlimited && candidate.quotaBytes > storage.limitBytes)))
+        && (candidate.quotaBytes <= 0
+          || (!storage.unlimited && candidate.quotaBytes > storage.limitBytes)
+          || (candidate.collaboratorLimit !== undefined
+            && (currentCollaboratorLimit === undefined
+              || (candidate.collaboratorLimit <= 0 && currentCollaboratorLimit > 0)
+              || (candidate.collaboratorLimit > 0 && currentCollaboratorLimit > 0
+                && candidate.collaboratorLimit > currentCollaboratorLimit)))))
       .sort((a, b) => (a.quotaBytes <= 0 ? Number.POSITIVE_INFINITY : a.quotaBytes)
         - (b.quotaBytes <= 0 ? Number.POSITIVE_INFINITY : b.quotaBytes));
     const planName = currentPlan?.name || plan;
@@ -556,28 +648,59 @@ export class ColabSettingsTab extends PluginSettingTab {
     }
 
     let usageText = storage.unlimited
-      ? `${fmtBytes(storage.usedBytes)} used — unlimited`
+      ? `${fmtBytes(storage.usedBytes)} used, unlimited storage`
       : `${fmtBytes(storage.usedBytes)} of ${fmtBytes(storage.limitBytes)} (${storage.usagePercent}%)`;
     if (currentPlan && !currentPlan.isDefault && info.planExpiresAt) {
-      usageText += ` · ${planName} until ${new Date(info.planExpiresAt).toLocaleDateString()}`;
+      usageText += ` · active until ${new Date(info.planExpiresAt).toLocaleDateString()}`;
     }
 
-    const planSetting = new Setting(container)
+    const currentCard = container.createDiv();
+    currentCard.setCssStyles({
+      background: 'var(--background-secondary)',
+      border: '1px solid var(--background-modifier-border)',
+      borderRadius: 'var(--radius-m)',
+      padding: '0 var(--size-4-3)',
+      marginBottom: 'var(--size-4-4)',
+    });
+    const collaboratorUsage = info.collaborators
+      ? info.collaborators.limit <= 0
+        ? `${info.collaborators.used} named collaborators, unlimited`
+        : `${info.collaborators.used} of ${info.collaborators.limit} named collaborators`
+      : null;
+    const planSetting = new Setting(currentCard)
       .setName(`Current plan: ${planName}`)
-      .setDesc(usageText);
+      .setDesc([usageText, collaboratorUsage].filter(Boolean).join(' · '));
 
     planSetting.addExtraButton((btn) => {
       btn.setIcon('refresh-cw').setTooltip('Refresh plan').onClick(() => this.renderPlanSection(container));
     });
 
+    const upgradeGrid = upgradePlans.length ? container.createDiv() : null;
+    upgradeGrid?.setCssStyles({
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+      gap: 'var(--size-4-3)',
+      marginBottom: 'var(--size-4-4)',
+    });
     for (const upgradePlan of upgradePlans) {
       const quota = upgradePlan.quotaBytes <= 0 ? 'Unlimited storage*' : `${fmtBytes(upgradePlan.quotaBytes)} storage`;
-      const description = [upgradePlan.description, quota, upgradePlan.priceLabel].filter(Boolean).join(' · ');
-      new Setting(container)
+      const collaboratorAllowance = upgradePlan.collaboratorLimit === undefined
+        ? null
+        : upgradePlan.collaboratorLimit <= 0
+          ? 'Unlimited named collaborators'
+          : `${upgradePlan.collaboratorLimit} named collaborators`;
+      const description = [upgradePlan.description, quota, collaboratorAllowance].filter(Boolean).join(' · ');
+      const card = upgradeGrid!.createDiv();
+      card.setCssStyles({
+        border: '1px solid var(--background-modifier-border)',
+        borderRadius: 'var(--radius-m)',
+        padding: '0 var(--size-4-3)',
+      });
+      new Setting(card)
         .setName(upgradePlan.name)
         .setDesc(description)
         .addButton((btn) => {
-          const label = `Choose ${upgradePlan.name}`;
+          const label = upgradePlan.priceLabel || `Choose ${upgradePlan.name}`;
           btn.setButtonText(label).setCta().onClick(async () => {
             if (!info.recoveryConfigured) {
               const proceed = await this.confirmAction(
@@ -663,9 +786,8 @@ export class ColabSettingsTab extends PluginSettingTab {
         .setName(c.name)
         .setDesc(c.uid.substring(0, 16) + '...')
         .addButton((btn) => {
-          btn.setButtonText('Copy UID').onClick(() => {
-            void navigator.clipboard.writeText(c.uid);
-            new Notice('UID copied');
+          btn.setButtonText('Copy User ID').onClick(() => {
+            void copyToClipboard(this.app, c.uid, 'User ID copied');
           });
         })
         .addButton((btn) => {
@@ -712,9 +834,11 @@ export class ColabSettingsTab extends PluginSettingTab {
       .setName('Add contact')
       .addText((text) => {
         text.setPlaceholder('Alias (optional)').onChange((v) => { newAlias = v.trim(); });
+        text.inputEl.setAttribute('aria-label', 'Contact alias (optional)');
       })
       .addText((text) => {
-        text.setPlaceholder('User UID').onChange((v) => { newUid = v.trim(); });
+        text.setPlaceholder('User ID').onChange((v) => { newUid = v.trim(); });
+        text.inputEl.setAttribute('aria-label', 'Contact User ID');
       })
       .addButton((btn) => {
         btn.setButtonText('Add').setCta().onClick(async () => {
@@ -723,36 +847,60 @@ export class ColabSettingsTab extends PluginSettingTab {
             return;
           }
           if (newUid === this.plugin.settings.uid) {
-            new Notice("That's your own UID");
+            new Notice('That’s your own User ID');
             return;
           }
-          if (contacts.some((c) => c.uid === newUid)) {
+          const uid = newUid;
+          const alias = newAlias;
+          if (contacts.some((c) => c.uid === uid)) {
             new Notice('Contact already exists');
             return;
           }
           // Verify the user exists by checking their public key
+          btn.setDisabled(true).setButtonText('Adding…');
           let info;
           try {
-            info = await this.plugin.api.getPublicKey(newUid);
+            info = await this.plugin.api.getPublicKey(uid);
           } catch (error) {
             new Notice(error instanceof DirectoryKeyChangedError
               ? `${error.message}. Verify it with the contact before resetting the pin above.`
               : 'Could not verify the contact identity key', 15_000);
             return;
+          } finally {
+            btn.setDisabled(false).setButtonText('Add');
           }
           if (!info) {
-            new Notice('User not found. Make sure they have the plugin installed.');
+            new Notice('User not found. Check the User ID and your connection; they need the Note Colab plugin connected to this server.');
             return;
           }
-          const displayName = newAlias || info.displayName || `User ${newUid.substring(0, 8)}`;
-          contacts.push({ uid: newUid, name: displayName });
+          // Another click may have added the same contact while the lookup ran.
+          if (contacts.some((c) => c.uid === uid)) {
+            new Notice('Contact already exists');
+            return;
+          }
+          const displayName = alias || info.displayName || `User ${uid.substring(0, 8)}`;
+          contacts.push({ uid, name: displayName });
           await this.plugin.saveSettings();
-          new Notice(info.displayName && !newAlias
+          new Notice(info.displayName && !alias
             ? `Added ${info.displayName}`
             : `Added ${displayName}${info.displayName ? ` (${info.displayName})` : ''}`);
           this.renderContacts(container);
         });
       });
+  }
+
+  /**
+   * Encrypt every shared note key in this vault with the web password's vault
+   * key and upload them. Returns how many were uploaded, or false on failure.
+   */
+  private async uploadWebAccessKeys(): Promise<number | false> {
+    const noteKeys = this.collectNoteKeys();
+    if (noteKeys.length === 0) return 0;
+    const encrypted: { noteShareId: string; encryptedKey: string }[] = [];
+    for (const nk of noteKeys) {
+      encrypted.push({ noteShareId: nk.noteShareId, encryptedKey: await encryptWithVaultKey(nk.encryptionKey, this.plugin.settings.vaultKey) });
+    }
+    return await this.plugin.api.uploadVaultKeys(encrypted) ? encrypted.length : false;
   }
 
   /** Collect all shared notes' encryption keys from vault frontmatter */

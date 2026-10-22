@@ -67,7 +67,7 @@ export class IncomingShareModal extends Modal {
         ? 'It will be imported as an editable note with two-way sync. Anyone with its web link can also edit.'
         : 'It will be imported as an editable note. Only invited collaborators can access it.';
     const behaviorDescription = desc.createEl('p', {
-      text: `${behavior} Accept to add it to your vault, or deny to ignore it.`,
+      text: `${behavior} Accept to add it to your vault, or decline the invitation${this.info.accessMode === 'invited_edit' ? ', which also removes your invited access' : ''}.`,
     });
     behaviorDescription.setCssStyles({ fontSize: '13px' });
 
@@ -75,10 +75,10 @@ export class IncomingShareModal extends Modal {
     const btnRow = contentEl.createDiv();
     btnRow.setCssStyles({ display: 'flex', gap: '8px', justifyContent: 'flex-end' });
 
-    const denyBtn = btnRow.createEl('button', { text: 'Deny' });
+    const denyBtn = btnRow.createEl('button', { text: 'Decline invitation' });
     denyBtn.addEventListener('click', () => this.decide('deny'));
 
-    const acceptBtn = btnRow.createEl('button', { text: 'Accept & import' });
+    const acceptBtn = btnRow.createEl('button', { text: 'Accept and import' });
     acceptBtn.setCssStyles({
       background: 'var(--interactive-accent)',
       color: 'var(--text-on-accent)',

@@ -30,6 +30,7 @@
     nonce: string;
     title: string | null;
     encryptedTitle?: string | null;
+    accessMode?: 'public_edit' | 'invited_edit' | 'read_only';
     createdAt: string;
   }
 
@@ -80,8 +81,21 @@
   let activeTab: 'notes' | 'shared' | 'storage' = 'notes';
   let searchQuery = '';
   let confirmDeleteId: string | null = null;
-  let confirmRevokeId: string | null = null;
+  let confirmDeclineId: number | null = null;
   let confirmLeaveId: string | null = null;
+
+  // One server request at a time; the view resolves `done` when it finishes.
+  let pending: string | null = null;
+
+  async function request(event: string, detail: Record<string, unknown>, key: string): Promise<boolean> {
+    if (pending) return false;
+    pending = key;
+    try {
+      return await new Promise<boolean>((resolve) => dispatch(event, { ...detail, done: resolve }));
+    } finally {
+      pending = null;
+    }
+  }
 
   $: safePendingShares = Array.isArray(pendingShares) ? pendingShares : [];
   $: safeSharedNotes = Array.isArray(sharedNotes) ? sharedNotes : [];
@@ -177,14 +191,14 @@
       class:active={activeTab === 'notes'}
       on:click={() => activeTab = 'notes'}
     >
-      My Notes
+      My notes
     </button>
     <button
       class="tab-btn"
       class:active={activeTab === 'shared'}
       on:click={() => activeTab = 'shared'}
     >
-      Shared with Me
+      Shared with me
       {#if pendingCount > 0}
         <span class="pending-badge">{pendingCount}</span>
       {/if}
@@ -201,7 +215,6 @@
   <!-- Loading -->
   {#if loading}
     <div class="loading-state">
-      <div class="loading-spinner"></div>
       <span>Loading…</span>
     </div>
   {:else if error}
@@ -219,6 +232,7 @@
             <input
               type="text"
               placeholder="Filter notes…"
+              aria-label="Filter notes by title"
               bind:value={searchQuery}
               class="search-input"
             />
@@ -266,18 +280,9 @@
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                   Links
                 </button>
-                {#if confirmRevokeId === note.noteShareId}
-                  <button class="action-btn action-danger" on:click={() => { dispatch('revoke', { noteShareId: note.noteShareId }); confirmRevokeId = null; }}>
-                    Confirm revoke
-                  </button>
-                  <button class="action-btn" on:click={() => confirmRevokeId = null}>
-                    Cancel
-                  </button>
-                {:else}
-                  <button class="action-btn action-danger" on:click={() => confirmRevokeId = note.noteShareId} title="Revoke share">
-                    Revoke
-                  </button>
-                {/if}
+                <button class="action-btn action-danger" on:click={() => dispatch('revoke', { noteShareId: note.noteShareId, title: note.title || 'Encrypted note' })} title="Delete shared note from server">
+                  Delete from server
+                </button>
               </div>
             </div>
           {/each}
@@ -300,13 +305,25 @@
                 <span>·</span>
                 <span>{ps.createdAt ? timeAgo(ps.createdAt) : ''}</span>
               </div>
+              {#if confirmDeclineId === ps.id}
+                <p class="confirm-hint">
+                  The note won’t be imported{ps.accessMode === 'invited_edit' ? ' and your invited access is removed; the owner must invite you again' : ''}.
+                </p>
+              {/if}
               <div class="note-actions">
-                <button class="action-btn action-accept" on:click={() => dispatch('import-share', { shareId: ps.shareId, encryptedKey: ps.encryptedKey, nonce: ps.nonce, senderUid: ps.senderUid, id: ps.id })}>
-                  Accept & Import
-                </button>
-                <button class="action-btn action-danger" on:click={() => dispatch('dismiss-share', { id: ps.id })}>
-                  Dismiss
-                </button>
+                {#if confirmDeclineId === ps.id}
+                  <button class="action-btn action-danger" disabled={pending !== null} on:click={async () => { if (await request('dismiss-share', { id: ps.id }, `decline:${ps.id}`)) confirmDeclineId = null; }}>
+                    {pending === `decline:${ps.id}` ? 'Declining…' : 'Confirm decline'}
+                  </button>
+                  <button class="action-btn" on:click={() => confirmDeclineId = null}>Cancel</button>
+                {:else}
+                  <button class="action-btn action-accept" disabled={pending !== null} on:click={() => request('import-share', { shareId: ps.shareId, encryptedKey: ps.encryptedKey, nonce: ps.nonce, senderUid: ps.senderUid, id: ps.id }, `import:${ps.id}`)}>
+                    {pending === `import:${ps.id}` ? 'Importing…' : 'Accept and import'}
+                  </button>
+                  <button class="action-btn action-danger" disabled={pending !== null} on:click={() => confirmDeclineId = ps.id}>
+                    Decline invitation
+                  </button>
+                {/if}
               </div>
             </div>
           {/each}
@@ -331,19 +348,24 @@
                 <span>·</span>
                 <span>Updated {timeAgo(note.updatedAt)}</span>
               </div>
+              {#if !note.localOnly && confirmLeaveId === note.shareId}
+                <p class="confirm-hint">
+                  You’ll stop receiving updates{note.accessMode === 'invited_edit' ? ', your invited access is removed,' : ''} and any local file becomes a private copy. The owner’s note is not affected.
+                </p>
+              {/if}
               <div class="note-actions">
                 <button class="action-btn" on:click={() => dispatch('open-note', { noteShareId: note.shareId })} title="Open in vault">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
                   Open
                 </button>
                 {#if !note.localOnly && confirmLeaveId === note.shareId}
-                  <button class="action-btn action-danger" on:click={() => { dispatch('leave-share', { shareId: note.shareId }); confirmLeaveId = null; }}>
-                    Confirm remove
+                  <button class="action-btn action-danger" disabled={pending !== null} on:click={async () => { if (await request('leave-share', { shareId: note.shareId }, `leave:${note.shareId}`)) confirmLeaveId = null; }}>
+                    {pending === `leave:${note.shareId}` ? 'Leaving…' : 'Confirm leave'}
                   </button>
                   <button class="action-btn" on:click={() => confirmLeaveId = null}>Cancel</button>
                 {:else if !note.localOnly}
                   <button class="action-btn action-danger" on:click={() => confirmLeaveId = note.shareId}>
-                    Remove from list
+                    Leave shared note
                   </button>
                 {/if}
               </div>
@@ -408,8 +430,8 @@
                 </div>
                 <div class="note-actions">
                   {#if confirmDeleteId === sn.noteShareId}
-                    <button class="action-btn action-danger" on:click={() => { dispatch('delete-note', { noteShareId: sn.noteShareId }); confirmDeleteId = null; }}>
-                      Confirm delete
+                    <button class="action-btn action-danger" disabled={pending !== null} on:click={async () => { if (await request('delete-note', { noteShareId: sn.noteShareId }, `delete:${sn.noteShareId}`)) confirmDeleteId = null; }}>
+                      {pending === `delete:${sn.noteShareId}` ? 'Deleting…' : 'Confirm delete'}
                     </button>
                     <button class="action-btn" on:click={() => confirmDeleteId = null}>Cancel</button>
                   {:else}
@@ -557,19 +579,6 @@
   .error-message {
     color: var(--color-red);
     text-align: center;
-  }
-
-  .loading-spinner {
-    width: 24px;
-    height: 24px;
-    border: 2px solid var(--background-modifier-border);
-    border-top-color: var(--interactive-accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 
   .tab-content {
@@ -726,6 +735,17 @@
   .action-btn:hover {
     background: var(--background-modifier-hover);
     color: var(--text-normal);
+  }
+
+  .action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .confirm-hint {
+    margin: 0 0 8px;
+    font-size: var(--font-ui-smaller);
+    color: var(--text-muted);
   }
 
   .action-accept {

@@ -1,5 +1,5 @@
 import { Notice, TFile, type App } from 'obsidian';
-import type { ApiClient } from '../api/client';
+import type { ApiClient, ShareLinkInfo } from '../api/client';
 import type { ColabSettings, ShareResult } from '../types';
 import { deriveRoomToken, deriveWriteCapability, encrypt, generateKey, encryptBinary } from '../crypto/crypto';
 import { encryptKeyForRecipient } from '../crypto/keyExchange';
@@ -7,6 +7,10 @@ import { DirectoryKeyChangedError } from '../crypto/identityTrust';
 import { parseFrontmatter, stopShareSync } from '../session/sessions';
 import { findImageEmbeds } from './imageEmbeds';
 import type { NoteColabFrontmatter } from './frontmatter';
+import { shareIdFromLink } from './shareLink';
+import { mayPublishAsOwner } from './shareOwnership';
+import { copyToClipboard } from '../ui/clipboard';
+import { RetiredLinkModal } from '../ui/RetiredLinkModal';
 
 /** Get the MIME type for common image extensions */
 function getMimeType(filename: string): string {
@@ -62,6 +66,7 @@ export async function shareNote(
   file: TFile,
   options: {
     accessMode: 'public_edit' | 'invited_edit' | 'read_only';
+    updateMode?: 'snapshot' | 'live';
     expiresIn?: number;
     showHelp?: boolean;
     collaborators?: string[];
@@ -71,6 +76,7 @@ export async function shareNote(
     showChrome?: boolean;
   }
 ): Promise<ShareResult | null> {
+  let createdShare: ShareResult | null = null;
   try {
     const content = await app.vault.read(file);
     const { frontmatter, body } = parseFrontmatter(content);
@@ -166,15 +172,17 @@ export async function shareNote(
       fm.colab_access = options.accessMode;
       fm.colab_encryption_key = encryptionKey;
       fm.colab_owner = true;
+      fm.colab_update_mode = options.accessMode === 'read_only' ? (options.updateMode || 'live') : 'live';
       if (result.expiresAt) {
         fm.colab_expires = result.expiresAt;
       }
     });
 
+    createdShare = { shareId: result.shareId, shareUrl, expiresAt: result.expiresAt };
+
     // Copy to clipboard (skip for invited_edit — invite link is copied separately)
     if (options.accessMode !== 'invited_edit') {
-      await navigator.clipboard.writeText(shareUrl);
-      new Notice(`Share link copied to clipboard!\n${shareUrl}`);
+      await copyToClipboard(app, shareUrl, 'Share link copied to clipboard');
     }
 
     if (pendingShares.length > 0) {
@@ -197,6 +205,11 @@ export async function shareNote(
       expiresAt: result.expiresAt,
     };
   } catch (e) {
+    if (createdShare) {
+      console.error('NoteColab: share created, but direct delivery failed', e);
+      new Notice('Share created, but direct delivery failed. Use Manage shared links to resend it.');
+      return createdShare;
+    }
     // The server rejects with 413 either when a single note exceeds the payload
     // cap or when the upload would push the account over its storage quota.
     // Prefer the server's message (it explains which, and offers an upgrade).
@@ -204,7 +217,8 @@ export async function shareNote(
     if (err?.status === 413) {
       new Notice('Failed to share note: ' + (err.json?.error || 'it is too large or your storage is full. Check Plan & storage in Note Colab settings.'));
     } else {
-      new Notice('Failed to share note: ' + (e as Error).message);
+      console.error('NoteColab: share failed', e);
+      new Notice('Couldn’t share this note. Check your connection and try again.');
     }
     return null;
   }
@@ -228,7 +242,7 @@ export async function revokeShare(
 
     const success = await api.deleteNote(shareId);
     if (!success) {
-      new Notice('Failed to revoke share');
+      new Notice('Couldn’t delete the shared note from the server. Check your connection and try again. Your vault copy is unchanged.');
       return false;
     }
 
@@ -241,34 +255,89 @@ export async function revokeShare(
       delete fm.colab_link_id;
       delete fm.colab_link;
       delete fm.colab_access;
+      delete fm.colab_update_mode;
       delete fm.colab_encryption_key;
       delete fm.colab_owner;
       delete fm.colab_expires;
       delete fm.colab_session;
     });
 
-    new Notice('Share revoked successfully');
+    new Notice(`"${file.basename}" was deleted from the server. Your vault copy was kept.`);
     return true;
   } catch (e) {
-    new Notice('Failed to revoke share: ' + (e as Error).message);
+    console.error('NoteColab: deleting shared note failed', e);
+    new Notice('Couldn’t finish deleting the shared note. Check your connection, then run the command again.');
     return false;
   }
 }
 
+export function isRetiredLink(link: ShareLinkInfo): boolean {
+  return link.retired ?? link.identityOnly ?? false;
+}
+
+/** The newest link that still grants anonymous access, if any. */
+export function newestActiveAnonymousLink(links: ShareLinkInfo[], now = Date.now()): ShareLinkInfo | undefined {
+  return links
+    .filter((link) => (link.accessMode === 'read_only' || link.accessMode === 'public_edit')
+      && !isRetiredLink(link)
+      && !(link.expiresAt && new Date(link.expiresAt).getTime() <= now))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/**
+ * Copy the note's share link. Once the owner has replaced (retired) the
+ * Original link it no longer works for anyone else, so copy the newest active
+ * anonymous link instead, or explain how to create one.
+ */
 export async function copyShareLink(
   app: App,
-  file: TFile
+  api: Pick<ApiClient, 'listLinks'>,
+  file: TFile,
+  openManageLinks: () => void,
 ): Promise<void> {
   let link = '';
+  let noteShareId = '';
+  let linkShareId = '';
+  let key = '';
+  let owner = false;
   await app.fileManager.processFrontMatter(file, (fm: NoteColabFrontmatter) => {
     link = fm.colab_link || '';
+    noteShareId = fm.colab_share_id || '';
+    linkShareId = fm.colab_link_id || shareIdFromLink(fm.colab_link);
+    key = fm.colab_encryption_key || link.split('#')[1] || '';
+    owner = mayPublishAsOwner(fm);
   });
 
   if (!link) {
     new Notice('This note is not shared. Use "Share note" first.');
     return;
   }
+  // Only the Original (canonical) link can be retired, and only owners can list links.
+  if (!owner || !noteShareId || linkShareId !== noteShareId) {
+    await copyToClipboard(app, link, 'Share link copied to clipboard');
+    return;
+  }
 
-  await navigator.clipboard.writeText(link);
-  new Notice('Share link copied to clipboard!');
+  const listed = await api.listLinks(noteShareId);
+  if (listed === 'forbidden') {
+    await copyToClipboard(app, link, 'Share link copied to clipboard');
+    return;
+  }
+  if (!listed) {
+    // Retirement is rare and owner-initiated, so an unreachable server should not block copying.
+    await copyToClipboard(app, link, 'Share link copied. Its status couldn’t be checked; if you replaced the original link, copy the new one from Manage shared links.');
+    return;
+  }
+  const original = listed.links.find((candidate) => candidate.shareId === noteShareId);
+  if (original && !isRetiredLink(original)) {
+    await copyToClipboard(app, link, 'Share link copied to clipboard');
+    return;
+  }
+  const replacement = newestActiveAnonymousLink(listed.links);
+  if (!replacement) {
+    new RetiredLinkModal(app, openManageLinks).open();
+    return;
+  }
+  const url = `${new URL(link).origin}/s/${replacement.shareId}#${key}`;
+  await copyToClipboard(app, url, 'The original link was retired, so the newest active link was copied.');
 }

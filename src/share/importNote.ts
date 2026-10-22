@@ -2,12 +2,14 @@ import { Notice, normalizePath, TFile, type App } from 'obsidian';
 import type { ApiClient } from '../api/client';
 import { isOfficialServerAlias, type ColabSettings } from '../types';
 import { decrypt } from '../crypto/crypto';
+import { pinIfEncrypted } from '../live/pins';
 import { downloadMissingAssets } from './assets';
 import { findImageEmbeds } from './imageEmbeds';
 import { ForeignHostModal } from '../ui/ForeignHostModal';
 import { sanitizeFilename, sharedNoteBasename, withFilenameCounter } from './sharedNoteFilename';
 import { existingImportNotice } from './duplicateImport';
 import { noteColabFrontmatter } from './frontmatter';
+import { recordedAccess } from './readOnlyMirror';
 
 /**
  * Origin embedded in a share link when it differs from the configured server,
@@ -100,13 +102,28 @@ export async function importNote(
 
     const note = await api.getNoteContent(shareId);
     if (!note) {
-      new Notice('Note not found or has expired');
+      // getNoteContent cannot tell an unreachable server from a dead link.
+      const meta = await api.getNoteMeta(shareId);
+      new Notice(meta === 'expired'
+        ? 'This share link has expired. Ask the sender for a new link.'
+        : meta === 'not_found'
+          ? 'This shared note no longer exists or its link was deleted. Ask the sender for a new link.'
+          : meta === 'forbidden'
+            ? 'This link no longer grants access. Ask the sender for a new link or an invitation.'
+            : 'Couldn’t load this note from the server. Check your connection and try again.');
       return false;
     }
 
     // Check if a file with this share already exists in the vault
     // Compare against both the canonical note share_id (roomId) and the link share_id
     const canonicalId = note.roomId || shareId;
+
+    // Pin before the file's session starts, so a later read reporting plain can't
+    // send this note's text to the plain room (§6.1).
+    const settings = opts?.settings;
+    if (settings && await pinIfEncrypted(settings, foreignOrigin(shareUrl, settings.serverUrl), encryptionKey, canonicalId, note)) {
+      await opts?.saveSettings?.();
+    }
     const existingFile = app.vault.getMarkdownFiles().find((f) => {
       const cache = app.metadataCache.getFileCache(f);
       const fmId = noteColabFrontmatter(cache?.frontmatter)?.colab_share_id;
@@ -179,14 +196,14 @@ export async function importNote(
     const canonicalShareId = note.roomId || shareId;
     const fmLines = [
       '---',
-      `colab_share_id: ${canonicalShareId}`,
-      `colab_link_id: ${shareId}`,
-      `colab_link: ${shareUrl}`,
-      `colab_access: ${note.accessMode}`,
-      `colab_encryption_key: ${encryptionKey}`,
+      `colab_share_id: ${JSON.stringify(canonicalShareId)}`,
+      `colab_link_id: ${JSON.stringify(shareId)}`,
+      `colab_link: ${JSON.stringify(shareUrl)}`,
+      `colab_access: ${JSON.stringify(recordedAccess(note, isOwner))}`,
+      `colab_encryption_key: ${JSON.stringify(encryptionKey)}`,
       `colab_owner: ${isOwner}`,
     ];
-    if (note.expiresAt) fmLines.push(`colab_expires: ${note.expiresAt}`);
+    if (note.expiresAt) fmLines.push(`colab_expires: ${JSON.stringify(note.expiresAt)}`);
     fmLines.push('---');
     const frontmatter = fmLines.join('\n') + '\n\n';
 
@@ -206,7 +223,8 @@ export async function importNote(
     new Notice(`Imported "${importedBasename}" into ${folderPath}/`);
     return true;
   } catch (e) {
-    new Notice('Failed to import note: ' + (e as Error).message);
+    console.error('NoteColab: import failed', e);
+    new Notice('Couldn’t import this note. Check the link and your connection, then try again.');
     return false;
   }
 }

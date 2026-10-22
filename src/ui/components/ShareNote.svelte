@@ -9,6 +9,7 @@
   }
 
   export let accessMode: 'public_edit' | 'invited_edit' | 'read_only' = 'read_only';
+  export let updateMode: 'snapshot' | 'live' = 'live';
   export let expiresIn = 86400;
   export let showHelp = false;
   export let theme: 'auto' | 'light' | 'dark' = 'auto';
@@ -18,6 +19,7 @@
   export let contacts: Contact[] = [];
   export let collaborators: string[] = [];
   export let submitting = false;
+  export let submitError = '';
   export let simple = false;
 
   let collabInput = '';
@@ -40,8 +42,10 @@
   }
 
   function handleSubmit() {
+    if (submitting) return;
     dispatch('share', {
       accessMode,
+      updateMode,
       expiresIn,
       showHelp,
       theme,
@@ -55,7 +59,7 @@
 </script>
 
 <div class="share-note">
-  <h2 class="share-heading">{simple ? 'Who should be able to use this note?' : 'Share Note'}</h2>
+  <h2 class="share-heading">{simple ? 'Who should be able to use this note?' : 'Share note'}</h2>
   {#if simple}
     <p class="share-intro">You can change or revoke access at any time.</p>
   {/if}
@@ -81,7 +85,7 @@
         <span class="access-name">View-only link</span>
         <span class="access-desc">{simple && !showAdvanced
           ? 'Best for sending a finished note. Expires in 24 hours by default.'
-          : 'View on the web; UID recipients get a read-only Obsidian mirror'}</span>
+          : 'View on the web; people you send it to by User ID get a read-only Obsidian mirror'}</span>
       </button>
       <button
         type="button"
@@ -94,8 +98,8 @@
         <span class="access-icon">🌐</span>
         <span class="access-name">Editable link</span>
         <span class="access-desc">{simple && !showAdvanced
-          ? 'Best for working on a note together in real time.'
-          : 'Anyone with the link can edit on the web or in Obsidian'}</span>
+          ? 'Anyone with this link can edit. Best for working on a note together in real time.'
+          : 'Anyone with this link can edit on the web or in Obsidian'}</span>
       </button>
       {#if showAdvanced}
       <button
@@ -115,6 +119,16 @@
   </div>
 
   <!-- Direct Obsidian delivery -->
+  {#if accessMode === 'read_only'}
+    <div class="share-field">
+      <label class="share-label" for="notecolab-update-mode">What should readers receive?</label>
+      <select id="notecolab-update-mode" bind:value={updateMode}>
+        <option value="live">An updating note, including my later edits</option>
+        <option value="snapshot">A snapshot of this version</option>
+      </select>
+      <p class="share-hint">{updateMode === 'snapshot' ? 'Later local edits stay private. Revoke this share and publish again to replace the snapshot.' : 'Later edits are automatically published. Anyone with the link can read and copy them.'}</p>
+    </div>
+  {/if}
   {#if showAdvanced}
   <div class="share-field">
       <span class="share-label">Send directly to Obsidian (optional)</span>
@@ -129,7 +143,7 @@
           {#each collaborators as uid (uid)}
             <div class="collab-chip">
               <span>{contactName(uid)}</span>
-              <button class="chip-remove" on:click={() => removeCollaborator(uid)}>×</button>
+              <button class="chip-remove" aria-label="Remove {contactName(uid)}" on:click={() => removeCollaborator(uid)}>×</button>
             </div>
           {/each}
         </div>
@@ -148,7 +162,8 @@
       <div class="collab-manual">
         <input
           type="text"
-          placeholder="Paste user ID to add…"
+          placeholder="Paste User ID to add…"
+          aria-label="User ID to send to"
           bind:value={collabInput}
           class="share-input"
           on:keydown={(e) => { if (e.key === 'Enter') { addCollaborator(collabInput); } }}
@@ -232,6 +247,9 @@
   {/if}
 
   <!-- Submit -->
+  {#if submitError}
+    <p class="share-submit-error" role="alert">{submitError}</p>
+  {/if}
   <div class="share-footer">
     <button class="share-btn-primary" on:click={handleSubmit} disabled={submitting}>
       {#if submitting}
@@ -298,6 +316,12 @@
     margin: 0 0 8px;
   }
 
+  .share-submit-error {
+    margin: 0 0 10px;
+    color: var(--text-error);
+    font-size: var(--font-ui-smaller);
+  }
+
   /* Access mode cards */
   .access-options {
     display: flex;
@@ -330,7 +354,7 @@
 
   .access-option.selected {
     border-color: var(--interactive-accent);
-    background: rgba(127, 109, 242, 0.08);
+    background: var(--background-modifier-active-hover);
   }
 
   .access-icon {
@@ -393,7 +417,7 @@
   }
 
   .chip-remove:hover {
-    color: #ef5350;
+    color: var(--text-error);
   }
 
   .collab-contacts {
@@ -554,6 +578,11 @@
 
   .toggle-switch input:checked + .toggle-slider {
     background: var(--interactive-accent);
+  }
+
+  .toggle-switch input:focus-visible + .toggle-slider {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: 2px;
   }
 
   .toggle-switch input:checked + .toggle-slider::before {

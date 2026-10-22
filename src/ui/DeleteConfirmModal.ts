@@ -14,7 +14,7 @@ export class DeleteConfirmModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
-    contentEl.createEl('h2', { text: 'Shared Note Deleted' });
+    contentEl.createEl('h2', { text: 'Shared note deleted' });
 
     const desc = contentEl.createDiv();
     desc.setCssStyles({ marginBottom: '16px', lineHeight: '1.5' });
@@ -64,11 +64,7 @@ export class DeleteConfirmModal extends Modal {
       this.close();
     });
 
-    const deleteBtn = btnRow.createEl('button', { text: 'Delete from server (recommended)' });
-    deleteBtn.setCssStyles({
-      background: 'var(--interactive-accent)',
-      color: 'var(--text-on-accent)',
-    });
+    const deleteBtn = btnRow.createEl('button', { text: 'Delete from server', cls: 'mod-warning' });
     deleteBtn.addEventListener('click', () => {
       this.onChoice(true);
       this.close();

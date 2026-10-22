@@ -143,7 +143,7 @@ function uint8ArrayToBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/, '');
 }
 
-function base64UrlToUint8Array(base64url: string): Uint8Array<ArrayBuffer> {
+export function base64UrlToUint8Array(base64url: string): Uint8Array<ArrayBuffer> {
   let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
   while (base64.length % 4) {
     base64 += '=';

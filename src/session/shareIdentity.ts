@@ -31,14 +31,15 @@ export function hasMatchingShareIdentity(
 }
 
 /**
- * Owners always join live document sync: the server grants them write through
- * their account token whatever the mode or expiry of the link they shared.
- * Everyone else needs an editable link.
+ * Owners join live document sync unless the note is a snapshot share: the
+ * server grants them write through their account token whatever the mode or
+ * expiry of the link they shared. Everyone else needs an editable link.
  */
 export function joinsLiveSync(
-  frontmatter: { colab_owner?: boolean; colab_access?: string } | undefined,
+  frontmatter: { colab_owner?: boolean; colab_access?: string; colab_update_mode?: string } | undefined,
 ): boolean {
-  return frontmatter?.colab_owner === true
+  // A snapshot share promises that later edits stay private.
+  return (frontmatter?.colab_owner === true && frontmatter.colab_update_mode !== 'snapshot')
     || frontmatter?.colab_access === 'public_edit'
     || frontmatter?.colab_access === 'invited_edit';
 }
@@ -48,7 +49,9 @@ export function ownsShare(frontmatter: string): boolean {
 }
 
 export function hasMatchingEditableShareIdentity(frontmatter: string, shareId: string): boolean {
-  return hasMatchingShareIdentity(frontmatter, shareId, ownsShare(frontmatter)
+  const ownerLiveSync = ownsShare(frontmatter)
+    && frontmatterValue(frontmatter, 'colab_update_mode') !== 'snapshot';
+  return hasMatchingShareIdentity(frontmatter, shareId, ownerLiveSync
     ? ['public_edit', 'invited_edit', 'read_only']
     : ['public_edit', 'invited_edit']);
 }
