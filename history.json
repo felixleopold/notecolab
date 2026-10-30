@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "intervalMinutes": 10,
-  "updatedAt": "2026-10-30T23:41:44.119387+00:00",
+  "updatedAt": "2026-10-30T23:51:31.573143+00:00",
   "notice": "Successful scheduled checks, not continuous monitoring or an uptime guarantee. Missing checks are unknown.",
   "observations": [
     {
@@ -11881,6 +11881,21 @@
           "service": "api",
           "ok": true,
           "durationMs": 388
+        }
+      ]
+    },
+    {
+      "at": "2026-10-30T23:51:31.573143+00:00",
+      "checks": [
+        {
+          "service": "website",
+          "ok": true,
+          "durationMs": 668
+        },
+        {
+          "service": "api",
+          "ok": true,
+          "durationMs": 547
         }
       ]
     }
