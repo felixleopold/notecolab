@@ -1,24 +1,9 @@
 {
   "schemaVersion": 1,
   "intervalMinutes": 10,
-  "updatedAt": "2026-11-27T03:50:10.028740+00:00",
+  "updatedAt": "2026-11-27T04:00:00.757339+00:00",
   "notice": "Successful scheduled checks, not continuous monitoring or an uptime guarantee. Missing checks are unknown.",
   "observations": [
-    {
-      "at": "2026-10-28T03:51:28.020880+00:00",
-      "checks": [
-        {
-          "service": "website",
-          "ok": true,
-          "durationMs": 621
-        },
-        {
-          "service": "api",
-          "ok": true,
-          "durationMs": 468
-        }
-      ]
-    },
     {
       "at": "2026-10-28T04:01:58.207855+00:00",
       "checks": [
@@ -53206,6 +53191,21 @@
           "service": "api",
           "ok": true,
           "durationMs": 491
+        }
+      ]
+    },
+    {
+      "at": "2026-11-27T04:00:00.757339+00:00",
+      "checks": [
+        {
+          "service": "website",
+          "ok": true,
+          "durationMs": 440
+        },
+        {
+          "service": "api",
+          "ok": true,
+          "durationMs": 371
         }
       ]
     }
